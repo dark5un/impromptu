@@ -696,13 +696,23 @@ def cmd_build_hf(args):
             print(f"❌ Could not probe presenter: {args.presenter}")
             sys.exit(1)
         pdur = info["duration"]
+    # The render container only sees /project — so copy the presenter INTO
+    # the project dir and reference it by basename (absolute host paths
+    # are unresolvable inside the container).
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pres_src = Path(args.presenter)
+    pres_name = pres_src.name
+    dest = out_dir / pres_name
+    if pres_src.resolve() != dest.resolve():
+        shutil.copy2(pres_src, dest)
     try:
-        index = build_hf_project(plan, args.presenter, pdur, args.output,
+        index = build_hf_project(plan, pres_name, pdur, out_dir,
                                  vertical=args.vertical)
     except ValueError as e:
         print(f"❌ {e}")
         sys.exit(1)
-    print(f"✓ HyperFrames project → {index}")
+    print(f"✓ HyperFrames project → {index} (presenter bundled as {pres_name})")
 
 
 RENDER_IMAGE = "localhost/hyperframes-render:latest"
@@ -796,10 +806,15 @@ def thumbnail_cmd(src, dst, ss=5.0):
 
 def tts_cmd(text_or_file, dst, voice="af_heart", speed=1.0,
             image=RENDER_IMAGE):
-    """Kokoro TTS via the one-shot image (hyperframes ships a `tts` command).
+    """Kokoro TTS voiceover track (Task 17, part of v0.3).
 
-    Runs inside the render container since the host has no Node.
-    NOTE: --entrypoint must precede the image in podman arg order.
+    Preferred path: local `hyperframes tts` (needs Node ≥ 22 + the HF CLI
+    + python3 with kokoro-onnx/soundfile — i.e. inside distrobox, since
+    the host has no Node). Falls back to the one-shot render container.
+
+    NOTE: the stock render image lacks python3/kokoro-onnx, so container
+    TTS fails until the image is extended. Prefer local_tts_cmd().
+    Podman --entrypoint must precede the image in arg order.
     """
     return ["podman", "run", "--rm",
             "--entrypoint", "hyperframes",
@@ -808,6 +823,22 @@ def tts_cmd(text_or_file, dst, voice="af_heart", speed=1.0,
             "tts", str(text_or_file),
             "--voice", voice, "--speed", str(speed),
             "--output", f"/output/{Path(dst).name}"]
+
+
+def local_tts_cmd(text_or_file, dst, voice="af_heart", speed=1.0):
+    """Local `hyperframes tts` argv (preferred when the HF CLI is on PATH)."""
+    return ["hyperframes", "tts", str(text_or_file),
+            "--voice", voice, "--speed", str(speed),
+            "--output", str(dst)]
+
+
+def run_tts(text_or_file, dst, voice="af_heart", speed=1.0):
+    """Run TTS locally if the HF CLI exists, else via one-shot container."""
+    if shutil.which("hyperframes"):
+        return subprocess.run(local_tts_cmd(text_or_file, dst, voice, speed),
+                              capture_output=True, text=True)
+    cmd = tts_cmd(text_or_file, dst, voice, speed)
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 def upload_checklist(plan, master, out_dir):
@@ -887,12 +918,16 @@ def cmd_package(args):
 def cmd_tts(args):
     dst = Path(args.output)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    cmd = tts_cmd(args.text, dst, args.voice, args.speed)
-    print(f"▶ Kokoro TTS ({args.voice}, speed {args.speed}) → {dst}")
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    local = shutil.which("hyperframes") is not None
+    print(f"▶ Kokoro TTS ({args.voice}, speed {args.speed}) → {dst} "
+          f"({'local CLI' if local else 'one-shot container'})")
+    r = run_tts(args.text, dst, args.voice, args.speed)
     if r.returncode != 0:
         print("❌ TTS failed:")
         print((r.stderr or r.stdout)[-1500:])
+        if not local:
+            print("Hint: the stock render image lacks python3/kokoro-onnx; "
+                  "run inside distrobox with the HF CLI + `pip install kokoro-onnx soundfile`.")
         sys.exit(1)
     print(f"✅ {dst}")
 

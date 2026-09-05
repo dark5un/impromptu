@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from impromptu import (
     format_timestamp, plan_chapters, description_md, loudnorm_cmd,
-    thumbnail_cmd, upload_checklist,
+    thumbnail_cmd, upload_checklist, tts_cmd, local_tts_cmd,
 )
 
 PLAN = {
@@ -58,3 +58,18 @@ def test_upload_checklist_never_autouploads(tmp_path):
     assert (tmp_path / "out" / "upload-checklist.md").exists()
     assert "NEVER" in text
     assert "youtube.com/upload" in text
+
+
+def test_tts_cmd_container_arg_order(tmp_path):
+    dst = tmp_path / "voice.wav"
+    cmd = tts_cmd("hello", dst, voice="af_heart", speed=1.0)
+    assert cmd[:4] == ["podman", "run", "--rm", "--entrypoint"]
+    assert "--entrypoint" in cmd and cmd.index("--entrypoint") < cmd.index("localhost/hyperframes-render:latest")
+    assert cmd[cmd.index("--voice") + 1] == "af_heart"
+
+
+def test_local_tts_cmd(tmp_path):
+    dst = tmp_path / "voice.wav"
+    cmd = local_tts_cmd("hello", dst)
+    assert cmd[:3] == ["hyperframes", "tts", "hello"]
+    assert cmd[cmd.index("--output") + 1] == str(dst)

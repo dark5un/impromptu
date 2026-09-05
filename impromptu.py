@@ -419,6 +419,91 @@ def pick_video_encoder():
     return "mpeg4", []
 
 
+# 58 native xfade transitions (indices 0-57, verified via
+# `ffmpeg -h filter=xfade`), plus the "none" alias (0.01s fade = cut).
+TRANSITIONS = (
+    "fade", "wipeleft", "wiperight", "wipeup", "wipedown",
+    "slideleft", "slideright", "slideup", "slidedown",
+    "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite",
+    "radial", "smoothleft", "smoothright", "smoothup", "smoothdown",
+    "circleopen", "circleclose", "vertopen", "vertclose",
+    "horzopen", "horzclose", "dissolve", "pixelize",
+    "diagtl", "diagtr", "diagbl", "diagbr",
+    "hlslice", "hrslice", "vuslice", "vdslice",
+    "hblur", "fadegrays",
+    "wipetl", "wipetr", "wipebl", "wipebr",
+    "squeezeh", "squeezev", "zoomin", "fadefast", "fadeslow",
+    "hlwind", "hrwind", "vuwind", "vdwind",
+    "coverleft", "coverright", "coverup", "coverdown",
+    "revealleft", "revealright", "revealup", "revealdown",
+)
+MODES = ("fullscreen", "corner", "bg_only")
+PIP_POSITIONS = ("bottom-right", "bottom-left", "top-right", "top-left")
+
+
+def validate_plan(plan, num_graphics=0, graphic_durations=None):
+    """Validate a scene plan. Returns a list of error strings (empty = valid).
+
+    Checks: required keys, numeric timing, contiguous scenes starting at 0,
+    graphic index bounds (+ optional duration >= scene duration),
+    mode/transition/pip_position enums.
+    """
+    errors = []
+    scenes = plan.get("scenes") if isinstance(plan, dict) else None
+    if not isinstance(scenes, list) or not scenes:
+        return ["plan.scenes must be a non-empty list"]
+    for key in ("fps", "width", "height"):
+        if key in plan and not isinstance(plan[key], (int, float)):
+            errors.append(f"plan.{key} must be numeric, got {plan[key]!r}")
+    expected_start = 0.0
+    for i, sc in enumerate(scenes):
+        where = f"scene[{i}]"
+        for key in ("start_sec", "end_sec"):
+            if key not in sc:
+                errors.append(f"{where}: missing {key}")
+            elif not isinstance(sc[key], (int, float)):
+                errors.append(f"{where}: {key} must be numeric, got {sc[key]!r}")
+        if isinstance(sc.get("start_sec"), (int, float)) and isinstance(sc.get("end_sec"), (int, float)):
+            if sc["end_sec"] <= sc["start_sec"]:
+                errors.append(f"{where}: end_sec ({sc['end_sec']}) must be > start_sec ({sc['start_sec']})")
+            if abs(sc["start_sec"] - expected_start) > 1e-6:
+                errors.append(f"{where}: scenes must be contiguous — start_sec {sc['start_sec']} != prev end {expected_start}")
+            expected_start = sc["end_sec"]
+        mode = sc.get("mode", "fullscreen")
+        if mode not in MODES:
+            errors.append(f"{where}: bad mode {mode!r}, must be one of {list(MODES)}")
+        g = sc.get("graphic")
+        if g is not None:
+            if not isinstance(g, int):
+                errors.append(f"{where}: graphic must be an int index or null, got {g!r}")
+            elif g < 0 or g >= num_graphics:
+                errors.append(f"{where}: graphic index {g} out of range (have {num_graphics} graphics)")
+            elif graphic_durations is not None and g < len(graphic_durations):
+                scene_dur = sc.get("end_sec", 0) - sc.get("start_sec", 0)
+                if graphic_durations[g] < scene_dur:
+                    errors.append(f"{where}: graphic #{g} is {graphic_durations[g]:.1f}s but scene needs {scene_dur:.1f}s")
+        t = sc.get("transition", "fade")
+        if t != "none" and t not in TRANSITIONS:
+            errors.append(f"{where}: bad transition {t!r} (58 natives + 'none')")
+        td = sc.get("transition_duration", 0.5)
+        if not isinstance(td, (int, float)) or td < 0:
+            errors.append(f"{where}: transition_duration must be a non-negative number, got {td!r}")
+        if mode == "corner" and "pip_position" in sc and sc["pip_position"] not in PIP_POSITIONS:
+            errors.append(f"{where}: bad pip_position {sc['pip_position']!r}, must be one of {list(PIP_POSITIONS)}")
+        for key in ("pip_scale",):
+            if key in sc and not isinstance(sc[key], (int, float)):
+                errors.append(f"{where}: {key} must be numeric, got {sc[key]!r}")
+    return errors
+
+
+def normalize_presenter(src, dst, fps=30):
+    """Re-encode VFR phone footage to CFR so xfade timestamps can't desync."""
+    cmd = ["ffmpeg", "-y", "-i", str(src),
+           "-vf", "setpts=PTS-STARTPTS", "-af", "asetpts=PTS-STARTPTS",
+           "-r", str(fps), str(dst)]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
 def cmd_composite(args):
     plan_path = args.scene_plan
     with open(plan_path) as f:
@@ -441,6 +526,18 @@ def cmd_composite(args):
     pinfo = probe_video(pres)
     if not pinfo:
         print("❌ Could not probe presenter video")
+        sys.exit(1)
+
+    graphic_durations = []
+    for g in graphics:
+        gi = probe_video(g)
+        graphic_durations.append(gi["duration"] if gi else 0.0)
+
+    errors = validate_plan(plan, len(graphics), graphic_durations)
+    if errors:
+        print("❌ Invalid scene plan:")
+        for e in errors:
+            print(f"  - {e}")
         sys.exit(1)
 
     total_dur = scenes[-1]["end_sec"]

@@ -504,6 +504,44 @@ def normalize_presenter(src, dst, fps=30):
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
+SAMPLE_SCRIPT = """# Demo Video
+
+## Scene 1 — Hook (0s-12s)
+Hi everyone, and welcome. Today we are talking about the pipeline.
+
+## Scene 2 — Concept (12s-35s)
+The key idea is simple: one render beats many stitches.
+"""
+
+SAMPLE_PLAN = {
+    "fps": 30, "width": 1920, "height": 1080,
+    "scenes": [
+        {"mode": "fullscreen", "graphic": None,
+         "start_sec": 0.0, "end_sec": 12.0,
+         "transition": "fade", "transition_duration": 0.5},
+        {"mode": "corner", "graphic": 0,
+         "start_sec": 12.0, "end_sec": 35.0,
+         "transition": "fade", "transition_duration": 0.5,
+         "pip_position": "bottom-right", "pip_scale": 0.25},
+    ],
+}
+
+
+def cmd_scaffold(args):
+    """Create videos/<slug>/ layout with sample script.md + scene-plan.json."""
+    root = Path(args.path)
+    (root / "hf_project").mkdir(parents=True, exist_ok=True)
+    (root / "graphics").mkdir(parents=True, exist_ok=True)
+    (root / "out").mkdir(parents=True, exist_ok=True)
+    script = root / "script.md"
+    if not script.exists():
+        script.write_text(SAMPLE_SCRIPT)
+    plan = root / "scene-plan.json"
+    if not plan.exists():
+        plan.write_text(json.dumps(SAMPLE_PLAN, indent=2) + "\n")
+    print(f"✓ Scaffolded {root} (script.md + scene-plan.json + hf_project/ + graphics/ + out/)")
+
+
 def cmd_composite(args):
     plan_path = args.scene_plan
     with open(plan_path) as f:
@@ -587,6 +625,12 @@ def main():
         parser = argparse.ArgumentParser(prog="impromptu new")
         parser.add_argument("path", nargs="?", default="script.md")
         cmd_new(parser.parse_args(sys.argv[2:]))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "scaffold":
+        parser = argparse.ArgumentParser(prog="impromptu scaffold")
+        parser.add_argument("path", help="Project dir, e.g. videos/my-video/")
+        cmd_scaffold(parser.parse_args(sys.argv[2:]))
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "composite":

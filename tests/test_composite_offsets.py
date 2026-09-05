@@ -37,5 +37,5 @@ def make_plan():
 
 def test_chained_xfade_offsets_are_cumulative():
     fg, _, _ = build_filtergraph(make_plan(), num_graphics=0)
-    offsets = [float(m) for m in re.findall(r"xfade=transition=\w+:d=[\d.]+:offset=([\d.]+)", fg)]
+    offsets = [float(m) for m in re.findall(r"xfade=transition=\w+:duration=[\d.]+:offset=([\d.]+)", fg)]
     assert offsets == [9.5, 19.0], f"offsets not cumulative: {offsets}"

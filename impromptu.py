@@ -12,6 +12,7 @@ Subcommands:
 import argparse
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -232,6 +233,7 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
     Returns (filtergraph, video_out_label, audio_out_label).
     """
     scenes = plan["scenes"]
+    scene_durs = [sc["end_sec"] - sc["start_sec"] for sc in scenes]
     if W is None:
         W = plan["width"]
     if H is None:
@@ -267,7 +269,8 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
         pv_filter = (
             f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS,"
             f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2"
+            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
+            f"fps={fps},format=yuv420p"
         )
 
         # ── per-scene presenter effects ──
@@ -311,12 +314,12 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
                     angle = eff.get("angle", "0.1")
                     gv_filter += f",rotate={angle}*PI/180:fillcolor=black@0"
             gv_filter += f"[gv{i}]"
-        else:
-            gv_filter = f"color=c=#0f172a:s={W}x{H}:d={dur}:r={fps}[gv{i}]"
+            lines.append(gv_filter)
+        elif g_idx is None:
+            pass  # fullscreen scene: no graphic source needed
 
         lines.append(pv_filter + f"[pv{i}]")
         lines.append(f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[pa{i}]")
-        lines.append(gv_filter)
 
         # compose by mode
         if mode == "fullscreen":
@@ -366,8 +369,8 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
         vout, aout = seg_v[0], seg_a[0]
     else:
         cur_v, cur_a = seg_v[0], seg_a[0]
+        running_dur = scene_durs[0]
         for i in range(1, len(seg_v)):
-            prev_dur = scenes[i-1]["end_sec"] - scenes[i-1]["start_sec"]
             td = scenes[i].get("transition_duration", 0.5)
             raw_transition = scenes[i].get("transition", "fade")
 
@@ -377,19 +380,43 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
             else:
                 xf, adj_td = raw_transition, td
 
-            offset = prev_dur - adj_td
+            offset = running_dur - adj_td
+            running_dur = running_dur + scene_durs[i] - adj_td
 
             nv = f"cv{i}"
-            lines.append(f"[{cur_v}][{seg_v[i]}]xfade=transition={xf}:d={adj_td}:offset={offset}[{nv}]")
+            lines.append(f"[{cur_v}][{seg_v[i]}]xfade=transition={xf}:duration={adj_td}:offset={offset}[{nv}]")
             cur_v = nv
 
             na = f"ca{i}"
-            lines.append(f"[{cur_a}][{seg_a[i]}]acrossfade=d={adj_td}[{na}]")
+            lines.append(f"[{cur_a}][{seg_a[i]}]acrossfade=duration={adj_td}[{na}]")
             cur_a = na
 
         fg = ";\n".join(lines)
         vout, aout = cur_v, cur_a
     return fg, vout, aout
+
+
+def pick_video_encoder():
+    """Pick the first available H.264/MP4 video encoder on this host.
+
+    Fedora's ffmpeg ships WITHOUT libx264; prefer hardware/native H.264
+    encoders, fall back to mpeg4 (always present). Returns (codec, extra_args).
+    """
+    try:
+        r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                           capture_output=True, text=True, timeout=30)
+        encs = r.stdout
+    except (OSError, subprocess.SubprocessError):
+        return "mpeg4", []
+    for codec, extra in (("libx264", ["-preset", "fast", "-crf", "18"]),
+                         ("libopenh264", []),
+                         ("h264_vaapi", []),
+                         ("h264_nvenc", []),
+                         ("h264_qsv", []),
+                         ("mpeg4", [])):
+        if re.search(rf"^\s*\S+\s+{codec}\b", encs, re.M):
+            return codec, extra
+    return "mpeg4", []
 
 
 def cmd_composite(args):
@@ -428,26 +455,16 @@ def cmd_composite(args):
 
     fg, vout, aout = build_filtergraph(plan, len(graphics), W=W, H=H, fps=fps)
 
+    vcodec, vextra = pick_video_encoder()
     # ── run ──
     cmd = ["ffmpeg", "-y", "-i", str(pres)]
     for g in graphics:
         cmd.extend(["-i", str(g)])
     cmd += ["-filter_complex", fg,
             "-map", f"[{vout}]", "-map", f"[{aout}]",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:v", vcodec] + vextra + [
             "-c:a", "aac", "-b:a", "192k",
-            "-pix_fmt", "yuv420p",
-            str(Path(args.output))]
-
-    # ── run ──
-    cmd = ["ffmpeg", "-y", "-i", str(pres)]
-    for g in graphics:
-        cmd.extend(["-i", str(g)])
-    cmd += ["-filter_complex", fg,
-            "-map", f"[{vout}]", "-map", f"[{aout}]",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-            "-c:a", "aac", "-b:a", "192k",
-            "-pix_fmt", "yuv420p",
+            "-pix_fmt", "yuv420p", "-r", str(fps),
             str(Path(args.output))]
 
     print(f"\n Rendering...")

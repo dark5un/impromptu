@@ -542,6 +542,179 @@ def cmd_scaffold(args):
     print(f"✓ Scaffolded {root} (script.md + scene-plan.json + hf_project/ + graphics/ + out/)")
 
 
+def _hf_pip_css(sc, W, H):
+    scale = sc.get("pip_scale", 0.25)
+    pip_w = int(W * scale)
+    pip_h = int(pip_w * 9 / 16)
+    pos = sc.get("pip_position", "bottom-right")
+    css_pos = {
+        "bottom-right": f"right: 30px; bottom: 30px;",
+        "bottom-left": f"left: 30px; bottom: 30px;",
+        "top-right": f"right: 30px; top: 30px;",
+        "top-left": f"left: 30px; top: 30px;",
+    }[pos] if pos in PIP_POSITIONS else "right: 30px; bottom: 30px;"
+    return (f"position: absolute; {css_pos} width: {pip_w}px; height: {pip_h}px;"
+            f" object-fit: cover; border-radius: 16px;"
+            f" border: 2px solid rgba(255,255,255,0.35); z-index: 5;")
+
+
+def build_hf_project(plan, presenter_src, presenter_duration, out_dir,
+                     vertical=False):
+    """Generate a single HyperFrames project from a scene plan (Mode B).
+
+    Uses the REAL composition contract: root #root with
+    data-composition-id/start/duration/width/height, every visible slot a
+    `.clip` with id + data-start/duration/track-index, presenter as a-roll
+    video+audio, graphic overlays on track 1+, ONE paused GSAP timeline
+    registered on window.__timelines["main"].
+
+    Returns the index.html path. Raises ValueError on invalid plan.
+    """
+    scenes = plan.get("scenes", []) if isinstance(plan, dict) else []
+    n_graphics = sum(1 for sc in scenes if sc.get("graphic") is not None)
+    errors = validate_plan(plan, n_graphics)
+    if errors:
+        raise ValueError("invalid scene plan:\n" + "\n".join(f"  - {e}" for e in errors))
+    W, H, fps = plan["width"], plan["height"], plan["fps"]
+    total = scenes[-1]["end_sec"]
+    if presenter_duration < total:
+        raise ValueError(f"presenter is {presenter_duration:.1f}s but plan needs {total:.1f}s")
+
+    clips = []
+    timeline_steps = []
+    for i, sc in enumerate(scenes):
+        start, dur = sc["start_sec"], sc["end_sec"] - sc["start_sec"]
+        title = sc.get("title", f"Scene {i + 1}")
+        mode, g = sc.get("mode", "fullscreen"), sc.get("graphic")
+        if mode == "corner":
+            # presenter shrinks to PiP during this scene
+            timeline_steps.append(
+                f'tl.to("#a-roll", {{ width: "{int(W * sc.get("pip_scale", 0.25))}px",'
+                f' height: "{int(W * sc.get("pip_scale", 0.25) * 9 / 16)}px",'
+                f" borderRadius: '16px', duration: 0.5 }}, {start});")
+            pip_css = _hf_pip_css(sc, W, H)
+            clips.append(
+                f'      <div id="pip-label-{i}" class="clip" data-start="{start}"'
+                f' data-duration="{dur}" data-track-index="3"'
+                f' style="{pip_css} color: #fff;'
+                f' font-size: 28px; padding: 8px 0;">{title}</div>')
+        else:
+            timeline_steps.append(
+                f'tl.to("#a-roll", {{ width: "100%", height: "100%",'
+                f" borderRadius: '0px', duration: 0.5 }}, {start});")
+        if g is not None:
+            clips.append(
+                f'      <div id="graphic-{i}" class="clip" data-start="{start}"'
+                f' data-duration="{dur}" data-track-index="1"'
+                f' style="position: absolute; inset: 0; display: flex;'
+                f' flex-direction: column; justify-content: center;'
+                f' align-items: center; background: #0f172a; color: #f8fafc;'
+                f' font-size: 72px; font-weight: 700; z-index: 2;">'
+                f'<div class="scene-title">{title}</div>'
+                f'<div class="scene-hint" style="font-size: 32px; color: #94a3b8;'
+                f' margin-top: 16px;">replace with charts / captions / lower-thirds</div>'
+                f"</div>")
+        if mode == "bg_only":
+            timeline_steps.append(
+                f'tl.set("#a-roll", {{ opacity: 0 }}, {start});'
+                f'tl.set("#a-roll", {{ opacity: 1 }}, {start + dur});')
+
+    clips_html = "\n".join(clips) if clips else '      <!-- presenter-only -->'
+    tl_html = "\n      ".join(timeline_steps)
+    html = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width={W}, height={H}" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+      html, body {{ margin: 0; width: {W}px; height: {H}px; overflow: hidden; background: #000; }}
+      body {{ font-family: "Inter", sans-serif; }}
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0"
+      data-duration="{total}" data-width="{W}" data-height="{H}" data-fps="{fps}">
+      <video id="a-roll" class="clip" src="{presenter_src}" muted playsinline
+        data-start="0" data-duration="{total}" data-track-index="0"
+        style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover"></video>
+      <audio id="a-roll-audio" src="{presenter_src}" data-start="0"
+        data-duration="{total}" data-track-index="2" data-volume="1"></audio>
+{clips_html}
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {{}};
+      const tl = gsap.timeline({{ paused: true }});
+      {tl_html}
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>
+"""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    index = out / "index.html"
+    index.write_text(html)
+    return str(index)
+
+
+def cmd_build_hf(args):
+    plan = json.loads(Path(args.scene_plan).read_text())
+    if args.presenter_duration is not None:
+        pdur = float(args.presenter_duration)
+    else:
+        info = probe_video(args.presenter)
+        if not info:
+            print(f"❌ Could not probe presenter: {args.presenter}")
+            sys.exit(1)
+        pdur = info["duration"]
+    try:
+        index = build_hf_project(plan, args.presenter, pdur, args.output,
+                                 vertical=args.vertical)
+    except ValueError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    print(f"✓ HyperFrames project → {index}")
+
+
+RENDER_IMAGE = "localhost/hyperframes-render:latest"
+
+
+def render_hf_cmd(project_dir, output_path, fps="30", quality="standard",
+                  image=RENDER_IMAGE):
+    """Build the one-shot podman render command (pure, testable).
+
+    Mounts the composition at /project:ro and the output dir at /output,
+    mirroring HyperFrames' own --docker arg builder.
+    """
+    proj = Path(project_dir).resolve()
+    out = Path(output_path).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # :Z relabels are REQUIRED on SELinux-enforcing hosts (Bluefin) —
+    # without them the container sees EACCES on the bind mounts.
+    return ["podman", "run", "--rm",
+            "-v", f"{proj}:/project:ro,Z",
+            "-v", f"{out.parent}:/output:Z",
+            image, "/project",
+            "--output", f"/output/{out.name}",
+            "--fps", str(fps), "--quality", quality, "--format", "mp4"]
+
+
+def cmd_render_hf(args):
+    if not Path(args.project).is_dir():
+        print(f"❌ Project dir not found: {args.project}")
+        sys.exit(1)
+    cmd = render_hf_cmd(args.project, args.output, args.fps, args.quality, args.image)
+    print(f"▶ Rendering {args.project} → {args.output} (image {args.image})")
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print("❌ Render failed:")
+        print((r.stderr or r.stdout)[-2000:])
+        sys.exit(1)
+    print(f"✅ {args.output}")
+
+
 def cmd_composite(args):
     plan_path = args.scene_plan
     with open(plan_path) as f:
@@ -638,8 +811,33 @@ def main():
         parser.add_argument("scene_plan", help="Scene plan JSON")
         parser.add_argument("--presenter", "-p", required=True, help="Your recording")
         parser.add_argument("--graphics", "-g", nargs="+", help="HyperFrames graphic MP4s")
+        parser.add_argument("--graphics-track", help="Single full-length Mode B graphic MP4")
         parser.add_argument("--output", "-o", default="output.mp4", help="Output path")
+        parser.add_argument("--normalize", action="store_true",
+                            help="Re-encode VFR presenter to CFR first")
         cmd_composite(parser.parse_args(sys.argv[2:]))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "build-hf":
+        parser = argparse.ArgumentParser(prog="impromptu build-hf")
+        parser.add_argument("scene_plan", help="Scene plan JSON")
+        parser.add_argument("--presenter", "-p", required=True, help="Presenter video path (referenced by the composition)")
+        parser.add_argument("--presenter-duration", type=float, default=None,
+                            help="Presenter duration in seconds (else ffprobed)")
+        parser.add_argument("--output", "-o", default="hf_project", help="HF project dir")
+        parser.add_argument("--vertical", action="store_true", help="1080x1920 Shorts layout")
+        cmd_build_hf(parser.parse_args(sys.argv[2:]))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "render-hf":
+        parser = argparse.ArgumentParser(prog="impromptu render-hf")
+        parser.add_argument("project", help="HyperFrames project dir")
+        parser.add_argument("--output", "-o", required=True, help="Output MP4")
+        parser.add_argument("--fps", default="30", help="Frame rate")
+        parser.add_argument("--quality", default="standard", choices=["draft", "standard", "high"])
+        parser.add_argument("--image", default="localhost/hyperframes-render:latest",
+                            help="One-shot render image tag")
+        cmd_render_hf(parser.parse_args(sys.argv[2:]))
         return
 
     # default: teleprompter

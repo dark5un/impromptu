@@ -599,7 +599,10 @@ def build_hf_project(plan, presenter_src, presenter_duration, out_dir,
     errors = validate_plan(plan, n_graphics)
     if errors:
         raise ValueError("invalid scene plan:\n" + "\n".join(f"  - {e}" for e in errors))
-    W, H, fps = plan["width"], plan["height"], plan["fps"]
+    if vertical:
+        W, H, fps = 1080, 1920, plan["fps"]
+    else:
+        W, H, fps = plan["width"], plan["height"], plan["fps"]
     total = scenes[-1]["end_sec"]
     if presenter_duration < total:
         raise ValueError(f"presenter is {presenter_duration:.1f}s but plan needs {total:.1f}s")

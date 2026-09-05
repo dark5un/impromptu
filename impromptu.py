@@ -739,6 +739,161 @@ def cmd_render_hf(args):
     print(f"✅ {args.output}")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# PACKAGE — YouTube finishing (loudnorm, chapters, thumbnail, description)
+# ═══════════════════════════════════════════════════════════════════════
+
+LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
+
+
+def format_timestamp(sec):
+    sec = int(sec)
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def plan_chapters(plan):
+    """[(start_sec, title)] from scene timings (plan 'title' or Scene N)."""
+    chapters = []
+    for i, sc in enumerate(plan.get("scenes", [])):
+        chapters.append((float(sc["start_sec"]), sc.get("title", f"Scene {i + 1}")))
+    return chapters
+
+
+def chapters_txt(plan):
+    lines = [f"{format_timestamp(s)} {t}" for s, t in plan_chapters(plan)]
+    return "\n".join(lines) + "\n"
+
+
+def description_md(plan):
+    title = plan.get("title", "Untitled video")
+    lines = [f"# {title}", "", "## Chapters", ""]
+    lines += [f"- {format_timestamp(s)} {t}" for s, t in plan_chapters(plan)]
+    lines += ["", "_Upload manually via YouTube Studio — impromptu never auto-uploads._", ""]
+    return "\n".join(lines)
+
+
+def loudnorm_cmd(src, dst):
+    """YouTube master: dual-pass-style single filter to -14 LUFS."""
+    vcodec, vextra = pick_video_encoder()
+    return (["ffmpeg", "-y", "-i", str(src),
+             "-filter:a", LOUDNORM_FILTER,
+             "-c:v", vcodec] + vextra + ["-c:a", "aac", "-b:a", "192k",
+             "-pix_fmt", "yuv420p", str(dst)])
+
+
+def thumbnail_cmd(src, dst, ss=5.0):
+    """1280x720 frame grab for the YouTube thumbnail slot."""
+    return ["ffmpeg", "-y", "-ss", str(ss), "-i", str(src),
+            "-frames:v", "1", "-vf", "scale=1280:720", str(dst)]
+
+
+def tts_cmd(text_or_file, dst, voice="af_heart", speed=1.0,
+            image=RENDER_IMAGE):
+    """Kokoro TTS via the one-shot image (hyperframes ships a `tts` command).
+
+    Runs inside the render container since the host has no Node.
+    NOTE: --entrypoint must precede the image in podman arg order.
+    """
+    return ["podman", "run", "--rm",
+            "--entrypoint", "hyperframes",
+            "-v", f"{Path(dst).resolve().parent}:/output:Z",
+            image,
+            "tts", str(text_or_file),
+            "--voice", voice, "--speed", str(speed),
+            "--output", f"/output/{Path(dst).name}"]
+
+
+def upload_checklist(plan, master, out_dir):
+    """Write a MANUAL upload checklist (never auto-upload). Returns its text."""
+    title = plan.get("title", "Untitled video")
+    text = (
+        f"# Upload checklist — {title}\n\n"
+        f"1. Open YouTube Studio → https://www.youtube.com/upload\n"
+        f"2. Upload file: {master}\n"
+        f"3. Title: {title}\n"
+        f"4. Description: paste from description.md\n"
+        f"5. Chapters: paste from chapters.txt (first chapter must start at 00:00)\n"
+        f"6. Thumbnail: upload thumbnail.png (1280x720)\n"
+        f"7. Playlist / tags / audience / visibility: fill in Studio (MANUAL step)\n\n"
+        f"impromptu NEVER uploads automatically — this file is the handoff.\n"
+    )
+    out = Path(out_dir) / "upload-checklist.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text)
+    return text
+
+
+def cmd_package(args):
+    src = Path(args.video)
+    if not src.exists():
+        print(f"❌ Video not found: {src}")
+        sys.exit(1)
+    plan = json.loads(Path(args.plan).read_text()) if args.plan else {"scenes": []}
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    master = out_dir / "final_loudnorm.mp4"
+    print(f"▶ Loudnorm → {master} ({LOUDNORM_FILTER})")
+    r = subprocess.run(loudnorm_cmd(src, master), capture_output=True, text=True)
+    if r.returncode != 0:
+        print("❌ Loudnorm failed:")
+        print(r.stderr[-1500:])
+        sys.exit(1)
+
+    if plan.get("scenes"):
+        (out_dir / "chapters.txt").write_text(chapters_txt(plan))
+        (out_dir / "description.md").write_text(description_md(plan))
+        print("✓ chapters.txt + description.md from scene timings")
+
+    thumb = out_dir / "thumbnail.png"
+    if args.thumbnail_time is not None and not args.no_thumbnail:
+        r = subprocess.run(thumbnail_cmd(master, thumb, args.thumbnail_time),
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print("⚠ Thumbnail grab failed (continuing):")
+            print(r.stderr[-500:])
+        else:
+            print(f"✓ {thumb} (1280x720 frame grab)")
+
+    if args.transcribe:
+        print("▶ Transcribing via one-shot container (local Whisper)…")
+        cmd = ["podman", "run", "--rm",
+               "--entrypoint", "hyperframes",
+               "-v", f"{master.resolve().parent}:/media:ro,Z",
+               "-v", f"{out_dir.resolve()}:/output:Z",
+               RENDER_IMAGE,
+               "transcribe", f"/media/{master.name}"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print("⚠ Transcribe failed (continuing):")
+            print((r.stderr or r.stdout)[-500:])
+        else:
+            print("✓ transcribe output:")
+            print((r.stdout or "")[-800:])
+
+    if plan.get("scenes"):
+        text = upload_checklist(plan, master.name, out_dir)
+        print("✓ upload-checklist.md (MANUAL upload — impromptu never auto-uploads)")
+    print(f"✅ Packaged in {out_dir}")
+
+
+def cmd_tts(args):
+    dst = Path(args.output)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    cmd = tts_cmd(args.text, dst, args.voice, args.speed)
+    print(f"▶ Kokoro TTS ({args.voice}, speed {args.speed}) → {dst}")
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print("❌ TTS failed:")
+        print((r.stderr or r.stdout)[-1500:])
+        sys.exit(1)
+    print(f"✅ {dst}")
+
+
 def cmd_composite(args):
     plan_path = args.scene_plan
     with open(plan_path) as f:
@@ -888,6 +1043,29 @@ def main():
         parser.add_argument("--image", default="localhost/hyperframes-render:latest",
                             help="One-shot render image tag")
         cmd_render_hf(parser.parse_args(sys.argv[2:]))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "package":
+        parser = argparse.ArgumentParser(prog="impromptu package")
+        parser.add_argument("video", help="Final video to package")
+        parser.add_argument("--plan", default=None, help="Scene plan JSON (chapters/description)")
+        parser.add_argument("--out-dir", "-o", default="out", help="Packaging output dir")
+        parser.add_argument("--thumbnail-time", type=float, default=5.0,
+                            help="Seconds into video for thumbnail grab")
+        parser.add_argument("--no-thumbnail", action="store_true",
+                            help="Skip thumbnail grab")
+        parser.add_argument("--transcribe", action="store_true",
+                            help="Whisper SRT via one-shot container")
+        cmd_package(parser.parse_args(sys.argv[2:]))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "tts":
+        parser = argparse.ArgumentParser(prog="impromptu tts")
+        parser.add_argument("text", help="Text to speak (or .txt file)")
+        parser.add_argument("--output", "-o", default="voiceover.wav", help="Output audio")
+        parser.add_argument("--voice", "-v", default="af_heart", help="Kokoro voice ID")
+        parser.add_argument("--speed", "-s", type=float, default=1.0, help="Speed multiplier")
+        cmd_tts(parser.parse_args(sys.argv[2:]))
         return
 
     # default: teleprompter

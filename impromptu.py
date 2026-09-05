@@ -227,10 +227,15 @@ def probe_video(path):
     return None
 
 
-def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
+def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None,
+                      graphics_track=False):
     """Build the ffmpeg filtergraph for a scene plan.
 
     Returns (filtergraph, video_out_label, audio_out_label).
+
+    graphics_track=True: a SINGLE full-length graphic input (Mode B render)
+    sits at input 1 and scenes reference time ranges on it, instead of
+    N per-scene graphic files.
     """
     scenes = plan["scenes"]
     scene_durs = [sc["end_sec"] - sc["start_sec"] for sc in scenes]
@@ -274,6 +279,9 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
         )
 
         # ── per-scene presenter effects ──
+        # NOTE: pv_filter ends with fps+format=yuv420p inline, so effects
+        # append AFTER that. Modes consume [pvN] directly (null = pass-through;
+        # corner converts back to rgba for the rounded-corner mask).
         effects = sc.get("effects", [])
         for eff in effects:
             etype = eff.get("type", "")
@@ -296,44 +304,59 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
             elif etype == "vflip":
                 pv_filter += ",vflip"
 
-        # ── per-scene graphic effects ── (before mode composition)
-        gv_filter = ""
-        if g_idx is not None and g_idx < num_graphics:
-            gv_filter = (
-                f"[{g_idx+1}:v]trim=start=0:duration={dur},setpts=PTS-STARTPTS,"
-                f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2"
-            )
-            gfx_effects = sc.get("graphic_effects", [])
-            for eff in gfx_effects:
-                etype = eff.get("type", "")
-                if etype == "zoompan":
-                    z = eff.get("z", "1.2")
-                    gv_filter += f",zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1"
-                elif etype == "rotate":
-                    angle = eff.get("angle", "0.1")
-                    gv_filter += f",rotate={angle}*PI/180:fillcolor=black@0"
-            gv_filter += f"[gv{i}]"
-            lines.append(gv_filter)
-        elif g_idx is None:
-            pass  # fullscreen scene: no graphic source needed
+        # Every filter output must be consumed exactly once — ffmpeg errors
+        # on unconnected outputs. So emit ONLY the branches the mode uses:
+        # presenter video for fullscreen/corner, graphic for bg_only/corner.
+        need_pv = mode in ("fullscreen", "corner")
+        need_gv = mode in ("bg_only", "corner")
 
-        lines.append(pv_filter + f"[pv{i}]")
+        # ── per-scene graphic branch ── (only when the mode shows graphics)
+        if need_gv:
+            if g_idx is not None and (graphics_track or g_idx < num_graphics):
+                if graphics_track:
+                    g_trim = f"[1:v]trim=start={start}:end={end}"
+                else:
+                    g_trim = f"[{g_idx+1}:v]trim=start=0:duration={dur}"
+                gv_filter = (
+                    f"{g_trim},setpts=PTS-STARTPTS,"
+                    f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                    f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
+                    f"fps={fps},format=yuv420p"
+                )
+                gfx_effects = sc.get("graphic_effects", [])
+                for eff in gfx_effects:
+                    etype = eff.get("type", "")
+                    if etype == "zoompan":
+                        z = eff.get("z", "1.2")
+                        gv_filter += f",zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1"
+                    elif etype == "rotate":
+                        angle = eff.get("angle", "0.1")
+                        gv_filter += f",rotate={angle}*PI/180:fillcolor=black@0"
+                gv_filter += f"[gv{i}]"
+            else:
+                # mode needs a background but no graphic file: solid color
+                gv_filter = f"color=c=#0f172a:s={W}x{H}:d={dur}:r={fps}[gv{i}]"
+            lines.append(gv_filter)
+
+        if need_pv:
+            lines.append(pv_filter + f"[pv{i}]")
         lines.append(f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[pa{i}]")
 
-        # compose by mode
+        # compose by mode ([pvN] is already CFR yuv420p; [gvN] likewise)
         if mode == "fullscreen":
-            lines.append(f"[pv{i}]format=yuv420p[{sv}]")
+            lines.append(f"[pv{i}]null[{sv}]")
             lines.append(f"[pa{i}]anull[{sa}]")
 
         elif mode == "bg_only":
-            lines.append(f"[gv{i}]format=yuv420p[{sv}]")
+            lines.append(f"[gv{i}]null[{sv}]")
             lines.append(f"[pa{i}]anull[{sa}]")
 
         elif mode == "corner":
-            # rounded-rect PiP
+            # rounded-rect PiP (presenter branch already ends fps+format=yuv420p;
+            # convert back to rgba for the geq rounded-corner mask)
             lines.append(
-                f"[pv{i}]scale={pip_w}:{pip_h}:force_original_aspect_ratio=decrease,"
+                f"[pv{i}]format=rgba,"
+                f"scale={pip_w}:{pip_h}:force_original_aspect_ratio=decrease,"
                 f"pad={pip_w}:{pip_h}:(ow-iw)/2:(oh-ih)/2,format=rgba,"
                 f"geq=a='if(lte(abs(X-W/2),W/2-{rad})*lte(abs(Y-H/2),H/2-{rad}),255,"
                 f"if(lt(hypot(max(abs(X-W/2)-W/2+{rad},0),"
@@ -367,6 +390,7 @@ def build_filtergraph(plan, num_graphics, W=None, H=None, fps=None):
     if len(seg_v) == 1:
         fg = ";\n".join(lines)
         vout, aout = seg_v[0], seg_a[0]
+        return fg, vout, aout
     else:
         cur_v, cur_a = seg_v[0], seg_a[0]
         running_dur = scene_durs[0]
@@ -733,18 +757,43 @@ def cmd_composite(args):
         if not g.exists():
             print(f"❌ Graphic not found: {g}")
             sys.exit(1)
+    track = Path(args.graphics_track) if getattr(args, "graphics_track", None) else None
+    if track and not track.exists():
+        print(f"❌ Graphics track not found: {track}")
+        sys.exit(1)
+    if track and graphics:
+        print("❌ Pass either --graphics or --graphics-track, not both")
+        sys.exit(1)
+    if getattr(args, "normalize", False):
+        synced = pres.parent / (pres.stem + "_synced.mp4")
+        print(f"▶ Normalizing VFR → CFR {fps}fps …")
+        r = normalize_presenter(pres, synced, fps)
+        if r.returncode != 0:
+            print("❌ Normalize failed:")
+            print(r.stderr[-1000:])
+            sys.exit(1)
+        pres = synced
 
     pinfo = probe_video(pres)
     if not pinfo:
         print("❌ Could not probe presenter video")
         sys.exit(1)
 
-    graphic_durations = []
-    for g in graphics:
-        gi = probe_video(g)
-        graphic_durations.append(gi["duration"] if gi else 0.0)
-
-    errors = validate_plan(plan, len(graphics), graphic_durations)
+    if track:
+        ti = probe_video(track)
+        graphic_durations = [ti["duration"] if ti else 0.0]
+        # full-length track: duration check is against the whole plan
+        errors = validate_plan(plan, 1)
+        if ti and ti["duration"] < scenes[-1]["end_sec"]:
+            errors.append(f"graphics track is {ti['duration']:.1f}s but plan needs {scenes[-1]['end_sec']:.1f}s")
+        inputs = [track]
+    else:
+        graphic_durations = []
+        for g in graphics:
+            gi = probe_video(g)
+            graphic_durations.append(gi["duration"] if gi else 0.0)
+        errors = validate_plan(plan, len(graphics), graphic_durations)
+        inputs = graphics
     if errors:
         print("❌ Invalid scene plan:")
         for e in errors:
@@ -761,12 +810,13 @@ def cmd_composite(args):
         dur = sc["end_sec"] - sc["start_sec"]
         print(f"  {i+1}. [{sc['mode']:12s}] {dur:5.1f}s  {g}")
 
-    fg, vout, aout = build_filtergraph(plan, len(graphics), W=W, H=H, fps=fps)
+    fg, vout, aout = build_filtergraph(plan, len(inputs), W=W, H=H, fps=fps,
+                                       graphics_track=bool(track))
 
     vcodec, vextra = pick_video_encoder()
     # ── run ──
     cmd = ["ffmpeg", "-y", "-i", str(pres)]
-    for g in graphics:
+    for g in inputs:
         cmd.extend(["-i", str(g)])
     cmd += ["-filter_complex", fg,
             "-map", f"[{vout}]", "-map", f"[{aout}]",

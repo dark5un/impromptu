@@ -191,6 +191,25 @@ Thanks for watching, and see you next time!
 # COMPOSITE — news-director style video compositor
 # ═══════════════════════════════════════════════════════════════════════
 
+def parse_framerate(fr):
+    """Parse an ffprobe r_frame_rate string ("30/1", "30000/1001", "25").
+
+    Returns 0.0 for zero denominators ("0/0") or unparseable input —
+    never raises, unlike the old eval()-based parse.
+    """
+    try:
+        text = str(fr).strip()
+        if "/" in text:
+            num_s, den_s = text.split("/", 1)
+            num, den = float(num_s), float(den_s)
+            if den == 0:
+                return 0.0
+            return num / den
+        return float(text)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def probe_video(path):
     r = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json",
                         "-show_format", "-show_streams", str(path)],
@@ -202,7 +221,7 @@ def probe_video(path):
             return {
                 "duration": float(d["format"]["duration"]),
                 "width": s["width"], "height": s["height"],
-                "fps": eval(fr),
+                "fps": parse_framerate(fr),
             }
     return None
 

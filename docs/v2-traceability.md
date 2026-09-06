@@ -84,7 +84,7 @@ rejects. Reconcile wrote documents its own loader refused to read.
 | Fonts baked + `fc-cache -fv` | `containers/Containerfile` | — | runtime | 157 fonts in image |
 | Node 22 + pinned headless shell | `hyperframes-render` stage | `test_headless_shell_path_is_resolved...` | runtime | complete |
 | Quadlet network/ports/UserNS/`:Z`/shm | `quadlets/studio.container` | `test_quadlet_productions_env_matches...` | static | complete |
-| Container service starts and serves | `quadlets/studio.container` | — | **blocked** | Not started as a systemd user service: that would install a unit into the user's live environment. The image builds and its binaries were exercised directly. |
+| Container service starts and serves | `quadlets/studio.container` | — | **runtime** | verified live — started as a systemd user unit; `/healthz` ok; queued render to `done` (100%, 119/120) wrote a real H.264 master. Required a non-root `studio` uid-1000 service user in the Containerfile (keep-id cannot traverse `/root`) |
 
 **Phase 4 defects found and fixed:**
 
@@ -152,9 +152,25 @@ package, with the output inspected frame by frame. Plus the MLT compositor
 (transitions, PiP, z-order, alpha, frame-exact length), the container image and
 its binaries, and the HTTP + WebSocket + MCP + pairing surface.
 
-**Blocked, with a named blocker:** starting the quadlet as a live systemd user
-service, which would install a unit into the user's environment. The image
-builds and was run directly instead.
+**Blocked, with a named blocker:** ~~starting the quadlet as a live systemd
+user service, which would install a unit into the user's environment. The
+image builds and was run directly instead.~~
+The quadlet has been started as a live systemd user service and verified (see
+below); the earlier "blocked" status no longer applies.
+
+**Verified as a live service (2026-09-07):** `studio.service` runs on the host
+as a systemd user unit via `distrobox-host-exec systemctl --user`. When we
+first started it, the container died instantly with
+`exec /root/.local/bin/uv: Permission denied` — the image had only ever been
+exercised as root, but keep-id runs the container as host uid 1000, which cannot
+traverse root's 0700 home. The fix, in the Containerfile (not on the host):
+a non-root `studio` (uid 1000) service user, `uv` relocated to
+`/usr/local/bin/uv`, chromium copied out of `/root/.cache` to
+`/usr/local/libexec/impromptu-chrome-headless-shell`, and `/app` chowned. The
+unit now serves `GET /healthz` → `{"status":"ok"}` on the mounted host volume,
+and a full queued render through `POST /api/productions/<name>/render` reported
+`done` at 100% (119/120 frames) and wrote a real 1920×1080 H.264+AAC master to
+`/app/videos/.../out/master.mp4`, owned by the host user.
 
 **Genuinely incomplete:** nothing remaining against the source plan's built
 scope. Voice-following scroll and the render queue — the two gaps this document

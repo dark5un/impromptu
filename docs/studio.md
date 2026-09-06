@@ -55,30 +55,37 @@ source, and `/models/ggml-base.en.bin` is a required external model mount. The
 HyperFrames Node 22/browser layer is adapted from the HyperFrames render
 Containerfile. The image builds and was exercised directly: whisper-cli
 transcribed a real take, HyperFrames rendered a real board, and the service
-answered /healthz on a bind-mounted productions root. It has NOT been started
-as a systemd user service; deploy the quadlet yourself (see below — it needs
-two fixes first).
+answered /healthz on a bind-mounted productions root.
+
+**Verified as a live service 2026-09-07:** `studio.service` is installed as a
+host systemd user unit and runs, serving `http://127.0.0.1:8787` on the mounted
+host volume. `/healthz` → ok and a queued render completed `done` at 100%
+(119/120 frames) writing a real 1920×1080 H.264+AAC master.
+
+Three things had to be true before it could start, two known up front and one
+discovered by actually starting it:
+
+1. `Image=localhost/impromptu:latest` must exist (the host store builds
+   `:f44`; it is tagged `:latest` as well).
+2. `%h/workspace/videos` and `%h/workspace/impromptu-models` must exist on the
+   host, or podman creates them root-owned and keep-id fails.
+3. **The image must run its service as a non-root uid-1000 user.** The original
+   image ran as root (`/root/.local/bin/uv`, chromium under `/root/.cache`);
+   keep-id maps the container to host uid 1000, which cannot traverse root's
+   0700 home, so the unit died instantly with `Permission denied`. The
+   Containerfile now runs a `studio` uid-1000 account with `uv`/chromium
+   relocated out of `/root` (see `docs/decisions.md`).
 
 `quadlets/studio.container` expects `ai.network`, publishes only
 `127.0.0.1:8787`, uses `UserNS=keep-id`, grants Chromium a 2 GiB shared-memory
 segment, and persists `%h/workspace/videos` with SELinux relabeling.
 
-**Checked on the host 2026-09-06 — the unit will not start as written:**
-
-1. `Image=localhost/impromptu:latest` does not exist; the host store has
-   `localhost/impromptu:f44`. Tag it, or better, pin a digest.
-2. Neither `%h/workspace/videos` nor `%h/workspace/impromptu-models` exists on
-   the host. Create them first, or podman will make them root-owned and
-   `UserNS=keep-id` will fail.
-
-`ai.network` *is* present, so that dependency is satisfied.
-
 ## Verification
 
 ```bash
-uv run pytest -q          # 191 passed, 0 skipped
+uv run pytest -q          # 202 passed, 0 skipped
 uv run ruff check .
-node --test tests/test_speech_matcher.mjs   # 13 passed
+node --test tests/test_speech_matcher.mjs   # 16 passed
 ```
 
 The tests verify the filesystem/hash/document helpers, the real WebSocket

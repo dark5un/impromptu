@@ -130,6 +130,20 @@ so I will not do it unasked. Say the word and I will run exactly the above.
 
 **Size:** minutes once you approve, but expect to fix items 1 and 2 first.
 
+**DONE (2026-09-07).** All of the above ran and passed. The unit now serves
+`/healthz` → ok, `/api/productions` lists the host volume, and a queued render
+completed `done` at 100% (119/120 frames) writing a real 1920×1080 H.264 master.
+
+A **third blocker** surfaced that the static audit and the "image confirmed
+running end to end" claim both missed: the image had only ever been run as
+root, but keep-id runs the container as host uid 1000, and the entrypoint lived
+under `/root` (0700) — so it died instantly with
+`exec /root/.local/bin/uv: Permission denied`. Fixed in the Containerfile (never
+on the host): a non-root `studio` uid-1000 service user, `uv` copied to
+`/usr/local/bin/uv`, chromium copied out of `/root/.cache` to
+`/usr/local/libexec/impromptu-chrome-headless-shell`, and `/app` chowned to
+`studio`. Documented in `docs/v2-traceability.md`.
+
 ---
 
 ## 4. Voice-following: two known limitations

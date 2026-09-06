@@ -185,3 +185,28 @@ encode it, so `--chroma 444` on a render that resolves to libopenh264 is a
 `MeltError` naming the fix rather than a silent degradation to 4:2:0. The
 container installs RPM Fusion's full ffmpeg, so libx264 is always present there
 and 444 is available for deliverables.
+
+## Quadlet service: non-root uid-1000 user (2026-09-07)
+
+The quadlet runs under `UserNS=keep-id`, which maps the container to the host
+user (uid 1000). The original image ran its service as **root** — `uv` at
+`/root/.local/bin/uv`, chromium under `/root/.cache` — so once we actually
+started it as a live unit it died instantly with
+`exec /root/.local/bin/uv: Permission denied`: uid 1000 cannot traverse root's
+0700 home. The static audit and the "image confirmed running end to end" check
+both missed this because the image had never been exercised under keep-id.
+
+**Decision:**
+
+- Run the service as a non-root `studio` account (`uid 1000`, matching the
+  host user mapping).
+- Relocate the root-owned tools into world-reachable paths: `uv` copied to
+  `/usr/local/bin/uv`; chromium **copied** (not symlinked) out of
+  `/root/.cache` into `/usr/local/libexec/impromptu-chrome-headless-shell`,
+  with `/usr/local/bin/chrome-headless-shell` symlinked to the copy.
+- `chown -R studio:studio /app` so the service can write boards/venv state and
+  the mounted host volume lines up without touching host ownership.
+
+This honors the rule "adjust the Containerfile UID, never host-dir ownership":
+the host volume stays panos-owned, the container just writes through the
+keep-id mapping.

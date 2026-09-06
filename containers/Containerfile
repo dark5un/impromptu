@@ -88,8 +88,36 @@ RUN SHELL_PATH=$(find /root/.cache/puppeteer /root/.cache/ms-playwright \
     && ln -sf "$SHELL_PATH" /usr/local/bin/chrome-headless-shell
 ENV PRODUCER_HEADLESS_SHELL_PATH=/usr/local/bin/chrome-headless-shell
 
+# ── non-root service user ─────────────────────────────────────────────────────
+# The unit runs under UserNS=keep-id, so the container maps to the HOST user
+# (uid 1000). Nothing the service touches may live under /root (0700, owned by
+# root): uid 1000 cannot traverse it, so the original /root/.local/bin/uv
+# entrypoint died instantly ("Permission denied"). Relocate both root-owned
+# tools the runtime needs -- uv and the chromium shell -- into world-reachable
+# paths, and run the service as a uid-1000 account so host bind-mount
+# ownership lines up without touching the host.
+RUN useradd --uid 1000 --create-home --shell /bin/bash studio \
+    && mkdir -p /usr/local/libexec
+
+# Resolve the baked chromium shell, then COPY it (not symlink) out of /root/
+# .cache so the non-root service user can actually execute it for board renders.
+RUN SHELL_PATH=$(find /root/.cache/puppeteer /root/.cache/ms-playwright \
+      \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -1) \
+    && test -n "$SHELL_PATH" \
+    && cp "$SHELL_PATH" /usr/local/libexec/impromptu-chrome-headless-shell \
+    && chmod 0755 /usr/local/libexec/impromptu-chrome-headless-shell \
+    && ln -sf /usr/local/libexec/impromptu-chrome-headless-shell /usr/local/bin/chrome-headless-shell
+
 WORKDIR /app
 COPY . /app
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && /root/.local/bin/uv sync --extra web --no-dev
+# uv's installer targets ~/.local/bin (under /root as root). Install, then copy
+# the binary to /usr/local/bin so the non-root service user can reach it.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && cp /root/.local/bin/uv /usr/local/bin/uv \
+    && chmod 0755 /usr/local/bin/uv \
+    && /usr/local/bin/uv sync --extra web --no-dev \
+    && chown -R studio:studio /app
+ENV HOME=/home/studio
 EXPOSE 8787
-CMD ["/root/.local/bin/uv", "run", "--no-sync", "uvicorn", "api.http:app", "--host", "0.0.0.0", "--port", "8787"]
+USER studio
+CMD ["/usr/local/bin/uv", "run", "--no-sync", "uvicorn", "api.http:app", "--host", "0.0.0.0", "--port", "8787"]

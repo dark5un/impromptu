@@ -137,3 +137,32 @@ as the compromise; adding RPM Fusion removes the compromise.
 Note the host distrobox still runs `ffmpeg-free`, so a render there selects
 libopenh264 and looks softer than a render in the container. Render in the
 container for deliverables.
+
+## Base image: Fedora 44, MLT 7.40.0 verified equivalent (2026-09-06)
+
+The image is pinned to Fedora 44 by digest. This needed checking rather than
+assuming, because F44 ships **MLT 7.40.0** while every render in this repo was
+originally verified against F43's **7.36.1**, and the source plan's gotcha 6
+records that MLT 7.36.0 changed the `luma` transition to linear-light blending.
+`luma` is exactly what impromptu uses for every dissolve and wipe, so this was
+a pixel-changing risk to the component whose correctness was hardest to
+establish.
+
+Tested by rendering the identical MLT project on both and comparing:
+
+    F44 MLT 7.40.0 vs F43 MLT 7.36.1
+    SSIM Y 1.000000  U 1.000000  V 1.000000  (inf dB, all planes)
+    329 frames / 10.986s on both
+
+Byte-identical. The linear-light change does not affect this project's
+transitions, so F44 is safe and is now the base.
+
+Note what this test does *not* rely on: frame count and duration were identical
+in both cases and would have stayed identical even if the blending had changed,
+which is why the comparison is SSIM against the older render rather than a
+structural assertion.
+
+Any future base bump should repeat exactly this: rebuild, re-render the
+reference production, SSIM against the current master, inspect frames at each
+transition boundary, re-check the qtblend/affine alpha finding, then re-pin the
+digest and record the new baseline here.

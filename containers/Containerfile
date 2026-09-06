@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1
-# Fedora 43 currently resolves to this digest; bump only with a reviewed rebuild.
-FROM fedora:43@sha256:2dfdf9253ac389ddceb0ba03a62749acf5587f0512d4f068d011018ef963db4e AS studio
+# Fedora 44 currently resolves to this digest; bump only with a reviewed rebuild.
+# MLT 7.40.0 here was verified to produce byte-identical output to F43's 7.36.1
+# (SSIM 1.000000 on all planes for the reference production) despite the
+# linear-light `luma` change flagged in the plan. See docs/decisions.md.
+FROM fedora:44@sha256:125c2106ffaa3b2035c5bb480355c6bee73f723bfab47012bb29269d97ec61e4 AS studio
 
 # HyperFrames' upstream render layer is Debian-based.  Keeping it as a named
 # stage makes the browser and Node provenance visible; Fedora still owns MLT,

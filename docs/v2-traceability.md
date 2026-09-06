@@ -1,7 +1,8 @@
 # impromptu v2 — plan-to-code traceability
 
-Audit date: **2026-09-06**. Environment: Fedora 43 distrobox, Python 3.14.6,
-MLT 7.36.1, ffmpeg 7.1.5 (`ffmpeg-free`), podman.
+Audit date: **2026-09-06**. Host: Fedora 43 distrobox, Python 3.14.6,
+MLT 7.36.1, ffmpeg 7.1.5 (`ffmpeg-free`), podman. Container: Fedora 44,
+MLT 7.40.0, RPM Fusion ffmpeg with libx264.
 
 ## How to read the verification class
 
@@ -75,7 +76,7 @@ rejects. Reconcile wrote documents its own loader refused to read.
 
 | Plan item | Implementation | Test | Class | Status |
 |---|---|---|---|---|
-| Fedora 43 digest-pinned | `containers/Containerfile` | `test_container_and_quadlet_contracts` | runtime | complete — image builds |
+| Fedora digest-pinned | `containers/Containerfile` | `test_container_and_quadlet_contracts` | runtime | complete — F44 pinned; MLT 7.40.0 verified byte-identical to F43's 7.36.1 (SSIM 1.000000 all planes) |
 | MLT pinned | `dnf install mlt mlt-qt6` | in-image `mlt-melt -version` | runtime | 7.36.1 confirmed |
 | Encoder decision explicit | `docs/decisions.md` | — | runtime | image has libx264, libopenh264, libvpx-vp9, prores_ks |
 | whisper.cpp + `whisper-cli` | `containers/Containerfile` | `test_whisper_build_failure_is_not_swallowed` | runtime | `/usr/local/bin/whisper-cli` present |

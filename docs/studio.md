@@ -21,7 +21,7 @@ The server provides:
 - `/mcp` when FastMCP is installed
 - the plain ES-module UI at `/`
 
-The container is intentionally explicit about its cost and inputs: Fedora 43 is
+The container is intentionally explicit about its cost and inputs: Fedora 44 is
 digest-pinned, MLT and RPM Fusion's full `ffmpeg` are installed, whisper.cpp is built from
 source, and `/models/ggml-base.en.bin` is a required external model mount. The
 HyperFrames Node 22/browser layer is adapted from the HyperFrames render

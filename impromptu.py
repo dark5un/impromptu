@@ -1169,7 +1169,7 @@ def cmd_direct(args):
     try:
         from core.direct import direct_production
         path = _production_path(args.directory)
-        direct_production(path)
+        direct_production(path, force=getattr(args, "force", False))
     except (DocumentError, OSError, ValueError, ImportError) as exc:
         print(f"❌ directing failed: {exc}")
         return 1
@@ -1205,6 +1205,9 @@ def main():
     if command == "direct":
         parser = argparse.ArgumentParser(prog="impromptu direct", description="Direct scenes and transitions in a production document")
         parser.add_argument("directory", help="Production directory or production.yaml")
+        parser.add_argument("--force", action="store_true",
+                            help="Re-decide every scene, discarding your manual "
+                                 "presenter/transition edits (default: fill only null fields)")
         raise SystemExit(cmd_direct(parser.parse_args(sys.argv[2:])))
     if command == "boards":
         parser = argparse.ArgumentParser(prog="impromptu boards", description="Render measured HyperFrames boards")

@@ -9,6 +9,7 @@ import yaml
 
 from core.direct import direct_document
 from core.document import load_document, validate_document
+from render.board import board_cache_path
 from render.melt import run_melt
 from render.mlt_xml import write_mlt
 
@@ -32,20 +33,57 @@ def _load_directed(source: Path) -> dict[str, Any]:
     return document
 
 
+def _resolve_boards(document: dict[str, Any], root: Path) -> dict[str, Path]:
+    """Map each board media name to its cached alpha ``.mov``.
+
+    Only already-built artifacts are returned; rendering is `impromptu boards`,
+    so `render` stays a pure composition step and fails loudly on a missing
+    board instead of launching a browser mid-render.
+    """
+    cache = root / ".cache" / "boards"
+    resolved: dict[str, Path] = {}
+    for scene in document.get("scenes", []):
+        name = scene.get("overlay")
+        if not name or name in resolved:
+            continue
+        media = document.get("media", {}).get(name)
+        if not media or media.get("type") != "board":
+            continue
+        measured = scene.get("measured_sec")
+        if measured is None:
+            continue
+        source = root / media["src"]
+        if not source.exists():
+            # A missing board source is reported by document_to_xml's
+            # require_boards guard, which names the media and the fix.
+            continue
+        candidate = board_cache_path(source, cache, float(measured))
+        if candidate.exists() and candidate.stat().st_size > 0:
+            resolved[name] = candidate
+    return resolved
+
+
 def render_production(
     directory: str | Path,
     *,
     runner: Callable[..., Any] = run_melt,
     threads: int = 1,
+    boards: dict[str, Any] | None = None,
 ) -> Path:
-    """Render ``production.yaml`` to ``out/master.mp4`` and return its path."""
+    """Render ``production.yaml`` to ``out/master.mp4`` and return its path.
+
+    Board media are substituted with their cached alpha ``.mov`` artifacts:
+    MLT cannot decode the authored HTML, so an unrendered board is a build
+    error rather than a silently broken picture.
+    """
     source = _production_path(directory)
     document = _load_directed(source)
     root = source.parent
     out = root / "out"
     out.mkdir(parents=True, exist_ok=True)
+    resolved = dict(boards) if boards is not None else _resolve_boards(document, root)
     project = out / "production.mlt"
-    write_mlt(document, project, root)
+    write_mlt(document, project, root, boards=resolved, require_boards=True)
     master = out / "master.mp4"
     runner(project, master, threads=threads)
     return master

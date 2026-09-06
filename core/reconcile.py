@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 from collections.abc import Iterable
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -69,22 +70,40 @@ def _assign(doc: dict[str, Any], transcript: list[dict[str, Any]]) -> list[list[
 
 
 def reconcile_data(doc: dict[str, Any], transcript: Iterable[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Write measured durations and scene-relative segments into *doc*.
+
+    Each scene is anchored at its own first word rather than at the previous
+    scene's end, so leading silence and inter-scene pauses are not billed as
+    scene time.  Segments therefore always begin at 0.0 and the last one ends
+    exactly at ``measured_sec``, which is what ``validate_document`` requires
+    and what a board authored against ``measured_sec`` assumes.
+
+    Gaps *inside* a scene are preserved by extending the previous segment to
+    the next segment's start: the pause is real delivery time, but a hole would
+    make the segment list non-contiguous.
+    """
     transcript = list(transcript)
     assigned = _assign(doc, transcript)
     drift = []
-    scene_start = 0.0
-    for index, (scene, items) in enumerate(zip(doc["scenes"], assigned)):
+    for scene, items in zip(doc["scenes"], assigned):
         planned = float(scene["planned_sec"])
         if items:
-            measured = max(item["end"] for item in items) - scene_start
+            anchor = min(item["start"] for item in items)
+            measured = max(item["end"] for item in items) - anchor
+            segments = [{"text": item["text"],
+                         "start": round(item["start"] - anchor, 6),
+                         "end": round(item["end"] - anchor, 6)} for item in items]
+            # Close intra-scene pauses so the list stays contiguous.
+            for current, following in pairwise(segments):
+                current["end"] = following["start"]
+            segments = [item for item in segments if item["end"] > item["start"]]
+            if segments:
+                segments[-1]["end"] = round(measured, 6)
             scene["measured_sec"] = round(measured, 6)
-            scene["segments"] = [{"text": item["text"], "start": round(item["start"] - scene_start, 6),
-                                  "end": round(item["end"] - scene_start, 6)} for item in items]
-            scene_start = max(item["end"] for item in items)
+            scene["segments"] = segments
         else:
             scene["measured_sec"] = planned
             scene["segments"] = []
-            scene_start += planned
         drift.append({"scene": scene["id"], "planned_sec": planned,
                       "measured_sec": scene["measured_sec"],
                       "delta_sec": round(scene["measured_sec"] - planned, 6)})

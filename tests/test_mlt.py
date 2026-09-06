@@ -33,9 +33,14 @@ def test_document_fixture_is_valid():
 def test_mlt_xml_has_named_tracks_and_audio_mix():
     tree = document_to_xml(document(), "/project")
     root = tree.getroot()
-    assert root.find("tractor/track[@producer='presenter-track']") is not None
-    assert root.find("tractor/track[@producer='overlay-track']") is not None
-    assert root.find("tractor/transition[@id='audio-mix']") is not None
+    # Scenes alternate across two presenter playlists so neighbours can overlap
+    # for a transition; the programme tractor is then composited with overlays.
+    assert root.find("playlist[@id='presenter-a']") is not None
+    assert root.find("playlist[@id='presenter-b']") is not None
+    assert root.find("playlist[@id='overlay-bed']") is not None
+    program = root.find("tractor[@id='presenter-program']")
+    assert program is not None
+    assert program.find("transition[@id='presenter-audio']") is not None
     assert "real_time" not in ET.tostring(root, encoding="unicode")
 
 

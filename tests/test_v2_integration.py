@@ -40,7 +40,17 @@ def test_direct_assigns_treatment_and_transition_from_media(production):
 def test_render_production_writes_document_mlt_and_runs_renderer(tmp_path, production):
     import yaml
 
+    from render.board import board_cache_path
+
     (tmp_path / "production.yaml").write_text(yaml.safe_dump(production, sort_keys=False))
+    # `render` composes; it does not build boards.  Stand in the cached alpha
+    # artifact that `impromptu boards` would have produced.
+    board_html = tmp_path / "boards" / "chart.html"
+    board_html.parent.mkdir(parents=True, exist_ok=True)
+    board_html.write_text('<div id="root" data-duration="3.0"></div>')
+    cached = board_cache_path(board_html, tmp_path / ".cache" / "boards", 3.0)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"mov")
     calls = []
 
     def runner(project, output, threads=1):
@@ -49,8 +59,21 @@ def test_render_production_writes_document_mlt_and_runs_renderer(tmp_path, produ
 
     result = render_production(tmp_path, runner=runner)
     assert result == tmp_path / "out" / "master.mp4"
-    assert (tmp_path / "out" / "production.mlt").exists()
-    assert calls == [(tmp_path / "out" / "production.mlt", result, 1)]
+    project = tmp_path / "out" / "production.mlt"
+    assert project.exists()
+    assert calls == [(project, result, 1)]
+    # The board must reach MLT as the rendered .mov, never as authored HTML.
+    xml = project.read_text()
+    assert cached.name in xml
+    assert "chart.html" not in xml
+
+
+def test_render_refuses_a_production_whose_boards_are_not_built(tmp_path, production):
+    import yaml
+
+    (tmp_path / "production.yaml").write_text(yaml.safe_dump(production, sort_keys=False))
+    with pytest.raises(ValueError, match="chart"):
+        render_production(tmp_path, runner=lambda *a, **k: None)
 
 
 def test_package_production_orchestrates_master_and_metadata(tmp_path, production):

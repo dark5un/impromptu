@@ -11,7 +11,16 @@ from typing import Any
 
 import yaml
 
-from .document import load_document
+from .document import DocumentError, load_document
+
+
+class ReconcileOverrunError(DocumentError):
+    """Written scene durations exceed the take they were measured from.
+
+    The render-time ``TakeTooShortError`` catches this one step later; this
+    halts the error where the bad values are created, so a document is never
+    persisted that the renderer will already know is impossible.
+    """
 
 
 def _seconds(value: Any) -> float:
@@ -116,6 +125,36 @@ def _run_whisper(command: list[str], take: str | Path | None) -> list[dict[str, 
     return _segments(json.loads(completed.stdout))
 
 
+def validate_measured_within_take(
+    doc: dict[str, Any], *, take_frames: int, fps: float | None = None,
+    take_name: str | None = None,
+) -> None:
+    """Raise ``ReconcileOverrunError`` if written scene durations exceed *take*.
+
+    The take cursor in ``render.mlt_xml.scene_layout`` is ``sum(measured_sec)``,
+    advancing the recording by every scene's length, so that sum is exactly the
+    take time the timeline consumes.  Checking it here rejects the same
+    impossible document that ``render.take.validate_take_length`` rejects one
+    step later, but at the moment the values are written rather than rendered.
+
+    A one-frame tolerance matches ``validate_take_length`` and the board
+    duration guard: encoders land a frame either side of a requested duration,
+    and rejecting an exact fit would fail correct documents.
+    """
+    fps = fps if fps is not None else float(doc["target"]["fps"])
+    take_name = take_name if take_name is not None else doc["presenter"]["source"]
+    required = round(sum(float(s["measured_sec"]) for s in doc["scenes"]) * fps)
+    if take_frames >= required - 1:
+        return
+    shortfall = (required - take_frames) / fps
+    raise ReconcileOverrunError(
+        f"reconciled scene durations overrun the take {take_name!r}: the "
+        f"timeline needs {required} take frames but the take has {take_frames} "
+        f"({shortfall:.2f}s short at {fps:g}fps). Re-record a longer take or "
+        f"cut the script; `impromptu render` would refuse this document too."
+    )
+
+
 def reconcile_document(path: str | Path, *, transcript_json: str | Path | None = None,
                        take: str | Path | None = None,
                        whisper_command: list[str] | None = None) -> dict[str, Any]:
@@ -128,10 +167,19 @@ def reconcile_document(path: str | Path, *, transcript_json: str | Path | None =
     else:
         raise ValueError("provide transcript_json or whisper_command")
     doc, drift = reconcile_data(doc, transcript)
+    if take is not None and Path(take).is_file():
+        from render.take import presenter_frames
+        validate_measured_within_take(doc, take_frames=presenter_frames(take))
     Path(path).write_text(yaml.safe_dump(doc, sort_keys=False))
     result = dict(doc)
     result["drift"] = drift
     return result
 
 
-__all__ = ["load_transcript", "reconcile_data", "reconcile_document"]
+__all__ = [
+    "ReconcileOverrunError",
+    "load_transcript",
+    "reconcile_data",
+    "reconcile_document",
+    "validate_measured_within_take",
+]

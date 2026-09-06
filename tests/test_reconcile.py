@@ -8,7 +8,12 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.document import validate_document
-from core.reconcile import reconcile_data, reconcile_document
+from core.reconcile import (
+    ReconcileOverrunError,
+    reconcile_data,
+    reconcile_document,
+    validate_measured_within_take,
+)
 
 
 def document():
@@ -141,3 +146,74 @@ def test_scene_with_no_matched_speech_falls_back_to_planned():
     assert out["scenes"][1]["segments"] == []
     assert drift[1]["delta_sec"] == 0.0
     assert validate_document(out) == []
+
+
+# ── overrun guard: durations written must fit the take ──────────────────────
+
+def test_reconcile_refuses_durations_that_overrun_the_take():
+    """The guard that halts the error at the point the values are written: the
+    sum of measured_sec must not exceed the take they were measured from,
+    mirroring render's take-length guard but one step earlier."""
+    doc = document()
+    out, _ = reconcile_data(doc, [
+        {"text": "Hello world", "start": 0.0, "end": 1.0},
+        {"text": "Goodbye now", "start": 1.0, "end": 6.0},
+    ])
+    # scenes measure 1.0 and 5.0 -> 6.0s total against a 5.5s take: overrun.
+    with pytest.raises(ReconcileOverrunError, match="take.mp4"):
+        # 5.5s * 30fps = 165 frames available, 180 frames required.
+        validate_measured_within_take(out, take_frames=165, fps=30)
+
+
+def test_reconcile_accepts_durations_that_fit_the_take():
+    doc = document()
+    out, _ = reconcile_data(doc, [
+        {"text": "Hello world", "start": 0.0, "end": 1.0},
+        {"text": "Goodbye now", "start": 1.0, "end": 5.0},
+    ])
+    validate_measured_within_take(out, take_frames=200, fps=30)  # 6.67s available
+
+
+def test_reconcile_overrun_guard_reports_the_shortfall():
+    doc = document()
+    out, _ = reconcile_data(doc, [
+        {"text": "Hello world", "start": 0.0, "end": 1.0},
+        {"text": "Goodbye now", "start": 1.0, "end": 9.0},
+    ])
+    with pytest.raises(ReconcileOverrunError) as excinfo:
+        validate_measured_within_take(out, take_frames=120, fps=30)  # 4.0s take
+    assert "3.0fps" in str(excinfo.value) or "overrun" in str(excinfo.value)
+
+
+def test_reconcile_overrun_guard_one_frame_tolerance():
+    """An exact fit must not fail, matching render's one-frame tolerance."""
+    doc = document()
+    out, _ = reconcile_data(doc, [
+        {"text": "Hello world", "start": 0.0, "end": 1.0},
+        {"text": "Goodbye now", "start": 1.0, "end": 6.0},
+    ])
+    # 6.0s at 30fps = 180 frames; a take of 179 frames is inside the tolerance.
+    validate_measured_within_take(out, take_frames=179, fps=30)
+
+
+def test_reconcile_document_refuses_a_real_take_that_is_too_short(tmp_path):
+    """reconcile_document probes the live take and refuses to persist values
+    that overrun it -- the wiring behind the pure-function guard."""
+    import subprocess
+    if subprocess.run(["which", "ffmpeg"], capture_output=True).returncode != 0:
+        pytest.skip("ffmpeg not available")
+    take = tmp_path / "take.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
+        "-t", "3", "-pix_fmt", "yuv420p", str(take),
+    ], capture_output=True, check=True)
+    output = tmp_path / "production.yaml"
+    output.write_text(yaml.safe_dump(document(), sort_keys=False))
+    transcript = tmp_path / "overrun.json"
+    # 6.0s of measured scenes against a 3s take.
+    transcript.write_text(json.dumps({"segments": [
+        {"start": 0, "end": 2, "text": "Hello world"},
+        {"start": 2, "end": 6, "text": "Goodbye now"},
+    ]}))
+    with pytest.raises(ReconcileOverrunError):
+        reconcile_document(output, transcript_json=transcript, take=take)

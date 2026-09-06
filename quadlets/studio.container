@@ -1,16 +1,24 @@
 [Unit]
 Description=impromptu video production studio
+# This unit runs on the HOST, not inside the `ai` distrobox where development
+# happens. `%h` below is therefore the host home (/var/home/panos). Install and
+# manage it with `distrobox-host-exec systemctl --user ...` when working from
+# the container; a bare systemctl there talks to the wrong user manager.
 After=network-online.target
 Wants=network-online.target
 
 [Container]
 ContainerName=systemd-impromptu-studio
+# Must exist in the HOST's podman store (`distrobox-host-exec podman images`);
+# an image built inside distrobox is invisible to host systemd.
 Image=localhost/impromptu:latest
 Network=ai.network
 UserNS=keep-id
 PublishPort=127.0.0.1:8787:8787
 ShmSize=2G
 # Host productions are deliberately the only persistent writable state.
+# Create these on the host before first start, or podman creates them
+# root-owned and UserNS=keep-id fails.
 Volume=%h/workspace/videos:/app/videos:Z
 Volume=%h/workspace/impromptu-models:/models:Z,ro
 Environment=IMPROMPTU_PRODUCTIONS=/app/videos

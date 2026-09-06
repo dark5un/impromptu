@@ -1,5 +1,30 @@
 # Studio server
 
+## Where things run
+
+This machine splits the work across two environments, and mixing them up is the
+most common way to lose an hour:
+
+| | Environment | Home |
+|---|---|---|
+| The `impromptu` CLI, `pytest`, `ruff`, editing code | **distrobox** (`ai`) | `/var/home/panos/.distrobox/homes/ai` |
+| `podman`, `systemctl --user`, quadlets, the studio service | **host** | `/var/home/panos` |
+
+Rules that follow from it:
+
+- Run every `podman` and `systemctl` command through **`distrobox-host-exec`**.
+  A bare `podman build` inside distrobox writes to the container's own image
+  store, which the host's systemd cannot see.
+- **`%h` in a quadlet expands to the host home** (`/var/home/panos`), not to
+  the container's `~`. `%h/workspace/videos` is a host path.
+- The repo has two valid paths: `/run/host/var/home/panos/workspace/...` from
+  distrobox, `/var/home/panos/workspace/...` on the host.
+- `curl http://127.0.0.1:8787/...` works from either side, because the port is
+  published on the host loopback and distrobox shares the host network
+  namespace.
+- Never fix a container permissions problem by changing host directory
+  ownership — adjust the Containerfile's UID instead.
+
 Phase 4-5 adds a local FastAPI studio surface and an optional FastMCP endpoint.
 The base CLI remains usable with only PyYAML. Install the server dependencies with
 `uv sync --extra web` (or `uv pip install -r requirements-web.txt`). FastMCP is a
@@ -17,9 +42,12 @@ The server provides:
 - `GET /api/productions` and `POST /api/productions/{name}`
 - `POST /api/productions/{name}/uploads`, storing SHA-256-addressed media
 - `GET /api/productions/{name}/validate`, backed by `core.document`
-- `WS /ws/teleprompter/{name}` with ready/state, pause/resume/toggle, and seek
+- `WS /ws/teleprompter/{name}` — `ready` carries the script and scene list;
+  actions are pause/resume/toggle, seek, speed, `voice` and `follow`
+- `POST /api/productions/{name}/render` (202 + job id) and
+  `GET /api/renders[/{job_id}]` for queue state and progress
 - `/mcp` when FastMCP is installed
-- the plain ES-module UI at `/`
+- the plain ES-module UI at `/`, including voice-following prompter scroll
 
 The container is intentionally explicit about its cost and inputs: Fedora 44 is
 digest-pinned, MLT and RPM Fusion's full `ffmpeg` are installed, whisper.cpp is built from
@@ -28,22 +56,40 @@ HyperFrames Node 22/browser layer is adapted from the HyperFrames render
 Containerfile. The image builds and was exercised directly: whisper-cli
 transcribed a real take, HyperFrames rendered a real board, and the service
 answered /healthz on a bind-mounted productions root. It has NOT been started
-as a systemd user service; deploy the quadlet yourself.
+as a systemd user service; deploy the quadlet yourself (see below — it needs
+two fixes first).
 
 `quadlets/studio.container` expects `ai.network`, publishes only
 `127.0.0.1:8787`, uses `UserNS=keep-id`, grants Chromium a 2 GiB shared-memory
 segment, and persists `%h/workspace/videos` with SELinux relabeling.
 
+**Checked on the host 2026-09-06 — the unit will not start as written:**
+
+1. `Image=localhost/impromptu:latest` does not exist; the host store has
+   `localhost/impromptu:f44`. Tag it, or better, pin a digest.
+2. Neither `%h/workspace/videos` nor `%h/workspace/impromptu-models` exists on
+   the host. Create them first, or podman will make them root-owned and
+   `UserNS=keep-id` will fail.
+
+`ai.network` *is* present, so that dependency is satisfied.
+
 ## Verification
 
 ```bash
-uv run pytest -q
+uv run pytest -q          # 191 passed, 0 skipped
 uv run ruff check .
+node --test tests/test_speech_matcher.mjs   # 13 passed
 ```
 
-The current tests verify pure filesystem/hash/document helpers, the WebSocket
-contract, UI hooks, and the text contracts of the Containerfile and quadlet.
-They do not claim a successful image build.
+The tests verify the filesystem/hash/document helpers, the real WebSocket
+contract via `fastapi.testclient`, the render queue, the vendored speech
+matcher, pixel-truth board compositing, take-length validation, and the text
+contracts of the Containerfile and quadlet.
+
+`httpx` is in the dev group deliberately: without it every `TestClient` test
+*silently skips*, which is how the teleprompter socket once shipped without
+sending the script. Run `pytest -ra` occasionally to confirm nothing is being
+skipped.
 
 ## Dependency failure behavior
 
@@ -55,16 +101,19 @@ error rather than silently faking MCP.
 ## Media note
 
 Upload hashing is content-addressed but does not yet transcode or CFR-normalize
-media. The plan's ingest normalization and voice-following transcription remain
-follow-up work; this slice only implements the minimal teleprompter control
-channel.
+media — the plan's ingest normalization is still follow-up work.
+
+Voice-following *is* implemented: recognition runs in the browser (Web Speech
+API) and the matched position is reported over the socket, so the studio process
+never handles audio. The matcher is vendored from
+`jlecomte/voice-activated-teleprompter` (MIT) — see `web/static/vendor/NOTICE`.
 
 ## Container build status
 
-Not run as part of this change: the Fedora/Node multi-stage build needs network,
-RPM repositories, and a large browser/model toolchain. See
-`docs/v2-traceability.md` for exactly which parts are verified by real
-execution and which are still outstanding.
+The image builds and has been exercised end to end on the host as
+`localhost/impromptu:f44`: `impromptu boards` → `render` → `package` produced a
+329-frame master with libx264. See `docs/v2-traceability.md` for exactly which
+parts are verified by real execution and which are still outstanding.
 
 This project remains MIT; MLT is invoked as a subprocess rather than linked.
 MLT licensing and the explicit encoder choice (RPM Fusion `ffmpeg` rather than

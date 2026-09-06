@@ -10,6 +10,37 @@
 
 ---
 
+## 0. Execution boundary: the agent is in distrobox, quadlets run on the host
+
+**This applies to every command in this plan and is not optional.**
+
+| | Where it runs | Home |
+|---|---|---|
+| The agent (me), `pytest`, `ruff`, `impromptu` CLI | **distrobox** container `ai` | `/var/home/panos/.distrobox/homes/ai` |
+| `podman`, `systemctl --user`, quadlets, the studio service | **host** | `/var/home/panos` |
+
+Consequences that have already caused confusion:
+
+- **Any** `podman` or `systemctl` invocation must go through
+  `distrobox-host-exec`. Bare `podman build` inside distrobox builds into the
+  *container's* store, which the host's systemd cannot see, and bare
+  `systemctl --user` talks to the wrong (or no) user manager.
+- **`%h` in a quadlet is the HOST home**, `/var/home/panos` — not the agent's
+  `~`. A path that exists in distrobox may not exist on the host, and vice
+  versa.
+- The repo itself is reachable from both sides but by *different* paths:
+  `/run/host/var/home/panos/workspace/...` from distrobox,
+  `/var/home/panos/workspace/...` on the host.
+- Host-side verification (`curl` against a published port) works from
+  distrobox only because the port is published on the host loopback and
+  distrobox shares the host network namespace. Do not assume the reverse.
+
+So: read/write code and run tests from distrobox; build images, install units
+and start services via `distrobox-host-exec`; never edit host state directly to
+work around a permissions problem (adjust the Containerfile instead).
+
+---
+
 ## 1. Ship the guard's counterpart in `reconcile`
 
 **Why:** `render` now refuses a take shorter than its timeline
@@ -53,16 +84,51 @@ trade-off in `docs/decisions.md`.
 
 **Why:** the only item still marked **blocked** in the traceability doc. The
 image builds and every binary in it has been exercised directly, but
-`quadlets/studio.container` has never been started as a systemd user unit —
-doing so installs a unit into your live environment, which I would not do
-unasked.
+`quadlets/studio.container` has never run as a systemd unit. **This is host
+work** (see §0) — the unit, podman and the service all live on the host, not in
+the agent's distrobox.
 
-**Do:** you run it once (`cp quadlets/studio.container ~/.config/containers/systemd/`,
-`systemctl --user daemon-reload && systemctl --user start studio.service`), and
-we confirm `/healthz`, the mounted productions volume, and that the prompter and
-render queue work over the published port. Then the row becomes runtime-verified.
+**Three real blockers, verified on the host 2026-09-06 — the unit cannot start
+as written:**
 
-**Size:** minutes, but needs your decision to install the unit.
+1. **The image tag does not exist.** The quadlet wants
+   `Image=localhost/impromptu:latest`; the host store has only
+   `localhost/impromptu:f44`. Either tag it or pin the quadlet to a digest
+   (the plan's own §6.6 argues for digest-pinning, so prefer that).
+2. **Neither volume source exists on the host.** `%h` expands to the *host*
+   home `/var/home/panos`, and both `~/workspace/videos` and
+   `~/workspace/impromptu-models` are absent. Podman would create them as
+   root-owned directories, or fail under `UserNS=keep-id`.
+3. **`ai.network` exists** (`~/.config/containers/systemd/ai.network`), so that
+   dependency is fine — noted so it is not re-investigated.
+
+**Do, all via `distrobox-host-exec`:**
+
+```bash
+distrobox-host-exec sh -c '
+  mkdir -p ~/workspace/videos ~/workspace/impromptu-models &&
+  podman tag localhost/impromptu:f44 localhost/impromptu:latest &&
+  cp '"$PWD"'/quadlets/studio.container ~/.config/containers/systemd/ &&
+  systemctl --user daemon-reload &&
+  systemctl --user start studio.service &&
+  systemctl --user --no-pager status studio.service'
+```
+
+Then verify — `curl` works from distrobox because the port is published on the
+host loopback:
+
+```bash
+curl -s http://127.0.0.1:8787/healthz
+curl -s http://127.0.0.1:8787/api/productions   # must show the HOST volume
+```
+
+…plus one queued render through `POST /api/productions/<name>/render` to prove
+progress reporting works in the service, not just under `uvicorn` by hand.
+
+**Needs your decision:** installing a unit changes your live host environment,
+so I will not do it unasked. Say the word and I will run exactly the above.
+
+**Size:** minutes once you approve, but expect to fix items 1 and 2 first.
 
 ---
 

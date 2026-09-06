@@ -336,15 +336,24 @@ first. This is why boards are Phase 3 and not Phase 1.
 
 ### Setup, once
 
+> **Where this runs.** The agent works inside the `ai` distrobox; podman,
+> systemd and the quadlet all live on the **host**. Prefix every podman /
+> systemctl command with `distrobox-host-exec` when running it from the
+> container, and remember `%h` in a quadlet is the *host* home
+> (`/var/home/panos`), not the container's.
+
 ```bash
 cd ~/workspace/github.com/dark5un/impromptu && \
-git checkout -b v2 && \
-podman build -t localhost/studio:v2 -f containers/Containerfile . && \
-cp quadlets/studio.container ~/.config/containers/systemd/ && \
-systemctl --user daemon-reload && \
-systemctl --user start studio.service && \
+distrobox-host-exec podman build -t localhost/impromptu:latest -f containers/Containerfile . && \
+distrobox-host-exec sh -c 'mkdir -p ~/workspace/videos ~/workspace/impromptu-models' && \
+distrobox-host-exec cp quadlets/studio.container ~/.config/containers/systemd/ && \
+distrobox-host-exec systemctl --user daemon-reload && \
+distrobox-host-exec systemctl --user start studio.service && \
 curl -s http://127.0.0.1:8787/healthz
 ```
+
+The final `curl` needs no prefix: the port is published on the host loopback
+and distrobox shares the host network namespace.
 
 ### Making a video
 

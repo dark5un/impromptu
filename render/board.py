@@ -24,6 +24,46 @@ _ATTR_RE = re.compile(r"\b([\w-]+)\s*=\s*([\"'])(.*?)\2", re.DOTALL)
 _ORIENTATIONS = {"landscape": (1920, 1080), "vertical": (1080, 1920)}
 STARTER_TEMPLATES = ("title_card", "bar_chart", "lower_third", "code_reveal")
 
+# ── alpha convention ──────────────────────────────────────────────────────────
+# HyperFrames renders a browser compositor's output, so its ProRes 4444 alpha is
+# **straight** (non-premultiplied): colour carries the authored value and alpha
+# is stored separately.  MLT's compositing path consumes the colour plane as if
+# it were **already premultiplied** and adds the background without scaling the
+# board's colour by its own alpha.
+#
+# The visible consequence, measured on the demo master: a bar track authored
+# ``rgba(255,255,255,.10)`` composited to pure white (255) instead of dark grey
+# (255 * 0.10 = 26).  Verified to be independent of compositing entirely — a
+# bare board producer with no transition reproduces it — so this is a decode-time
+# convention mismatch, not an `affine` or keyframe problem.
+#
+# Fixing it here rather than at render time is deliberate: the board MOV is a
+# content-addressed cache artifact, so the conversion happens once per board and
+# the edit loop pays nothing.  MLT ships no premultiply filter (checked
+# `mlt-melt -query filters`), so an ffmpeg pass is the only option.
+PREMULTIPLY_FILTER = "premultiply=inplace=1"
+
+# 10-bit alpha keeps thin strokes and hairline rules clean; ProRes 4444 is
+# retained so the alpha plane stays full-resolution (see §4.1 of the plan on why
+# VP9's quarter-res yuva420p is unacceptable for boards).
+PREMULTIPLY_PIX_FMT = "yuva444p10le"
+
+
+def premultiply_command(source: str | Path, destination: str | Path) -> list[str]:
+    """Build the ffmpeg argv converting straight alpha to premultiplied alpha.
+
+    Pure function so the argv contract is unit-testable without invoking ffmpeg.
+    """
+    return [
+        "ffmpeg", "-v", "error", "-y", "-i", str(source),
+        "-vf", PREMULTIPLY_FILTER,
+        "-c:v", "prores_ks", "-profile:v", "4444",
+        "-pix_fmt", PREMULTIPLY_PIX_FMT,
+        # A board is a silent overlay; carrying or inventing audio here would
+        # add a stream MLT then has to mix away.
+        "-an", str(destination),
+    ]
+
 
 def _html_bytes(source: str | bytes | Path) -> bytes:
     if isinstance(source, Path):
@@ -122,6 +162,7 @@ def render_board(
     runner: Callable[..., Any] = subprocess.run,
     command: list[str] | None = None,
     vendor: bool = True,
+    premultiply: bool = True,
 ) -> Path:
     """Validate and render one board, returning its cached MOV artifact."""
     source = Path(board)
@@ -134,12 +175,33 @@ def render_board(
     # the render aborts in Chrome with sub_timeline_script_failure.
     if vendor:
         vendor_gsap(source.parent)
-    argv = command or hyperframes_command(source, destination, fps=fps)
+    # HyperFrames writes straight alpha, which MLT misreads as premultiplied, so
+    # the raw render lands beside the cache entry and is converted into place.
+    # The cache path itself must always end up holding the MLT-ready artifact.
+    staged = (destination.with_suffix(".straight.mov") if premultiply
+              else destination)
+    argv = command or hyperframes_command(source, staged, fps=fps)
     completed = runner(argv, check=True)
     if completed is not None and getattr(completed, "returncode", 0) not in (0, None):
         raise BoardError(f"board render failed with exit code {completed.returncode}")
-    if not destination.exists():
-        raise BoardError(f"board renderer did not create {destination}")
+    if not staged.exists():
+        raise BoardError(f"board renderer did not create {staged}")
+    if premultiply:
+        converted = runner(premultiply_command(staged, destination), check=True)
+        if converted is not None and getattr(converted, "returncode", 0) not in (0, None):
+            raise BoardError(
+                "premultiplying the board alpha failed with exit code "
+                f"{converted.returncode}"
+            )
+        if not destination.exists():
+            raise BoardError(
+                f"alpha premultiply did not create {destination}. Boards must be "
+                "premultiplied before MLT composites them, or semi-transparent "
+                "pixels render at full opacity."
+            )
+        # The straight-alpha intermediate is not the cache key's artifact and
+        # would otherwise double the cache's disk footprint per board.
+        staged.unlink(missing_ok=True)
     return destination
 
 
@@ -150,6 +212,7 @@ def build_boards(
     cache_dir: str | Path | None = None,
     runner: Callable[..., Any] = subprocess.run,
     vendor: bool = True,
+    premultiply: bool = True,
 ) -> dict[str, Path]:
     """Build each named board referenced by a scene overlay exactly once."""
     root_path = Path(root)
@@ -168,6 +231,7 @@ def build_boards(
         result[name] = render_board(
             root_path / media["src"], cache, measured_sec=float(measured),
             fps=float(document["target"]["fps"]), runner=runner, vendor=vendor,
+            premultiply=premultiply,
         )
     return result
 
@@ -221,6 +285,8 @@ starter_templates = _StarterTemplates()
 
 
 __all__ = [
+    "PREMULTIPLY_FILTER",
+    "PREMULTIPLY_PIX_FMT",
     "STARTER_TEMPLATES",
     "BoardDurationError",
     "BoardError",
@@ -230,6 +296,7 @@ __all__ = [
     "declared_duration",
     "extract_duration",
     "hyperframes_command",
+    "premultiply_command",
     "render_board",
     "render_document_boards",
     "render_template",

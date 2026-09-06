@@ -70,13 +70,24 @@ def test_build_boards_renders_named_board_entries_and_caches(tmp_path):
     calls = []
     def runner(command, check):
         calls.append((command, check))
-        Path(command[command.index("--output") + 1]).write_bytes(b"mov")
+        # A board build is two stages: HyperFrames writes straight alpha to a
+        # staged path, then ffmpeg premultiplies it into the cache path.
+        if "--output" in command:
+            Path(command[command.index("--output") + 1]).write_bytes(b"mov")
+        else:
+            Path(command[-1]).write_bytes(b"premultiplied mov")
     first = build_boards(document, root=tmp_path, runner=runner, vendor=False)
     second = build_boards(document, root=tmp_path, runner=runner, vendor=False)
     assert first["chart"].suffix == ".mov"
     assert second == first
-    assert len(calls) == 1
+    # Two calls for the first build (render + premultiply), none for the second:
+    # the content-addressed cache must not re-render an unchanged board.
+    assert len(calls) == 2
     assert "--format" in calls[0][0] and "mov" in calls[0][0]
+    assert calls[1][0][0] == "ffmpeg" and "premultiply=inplace=1" in calls[1][0]
+    # The cache entry holds the premultiplied artifact, not the raw render.
+    assert first["chart"].read_bytes() == b"premultiplied mov"
+    assert not first["chart"].with_suffix(".straight.mov").exists()
 
 
 def test_build_boards_rejects_scene_duration_mismatch(tmp_path):

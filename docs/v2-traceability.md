@@ -159,13 +159,23 @@ builds and was run directly instead.
 **Genuinely incomplete:** voice-following prompter scroll and the render queue.
 These are the honest remaining gaps against the source plan.
 
-**Open bug:** composited boards show a periodic vertical comb artifact in the
-master (and the bar track renders white instead of dark grey). Diagnosed down
-to interpolated `affine` `rect` keyframes — HyperFrames, the encoder, and
-`affine` with a static rect are each proven innocent. Full evidence and the
-one-step confirmation are in `docs/open-bug-board-comb-artifact.md`. Note that
-every structural assertion passes with the artifact present, which is why it
-needs a pixel-comparison regression test alongside the fix.
+**Fixed since the audit:** the comb artifact was an **alpha convention**
+mismatch, not interpolated `affine` keyframes as first diagnosed. HyperFrames
+writes straight alpha; MLT consumes it as premultiplied, so every
+semi-transparent pixel composited at full intensity (the bar track went white,
+and anti-aliased edges lost their gradient, which is what looked like a comb).
+Boards are now premultiplied at build time. Board-region mean abs error against
+the source board fell 39.318 → 1.167 and the bar track reads `[25,25,25]`
+against an expected 26. Evidence, the three configurations that disproved the
+original diagnosis, and the lesson are in
+`docs/fixed-board-alpha-convention.md`; regression tests are pixel-truth in
+`tests/test_alpha_compositing.py`.
+
+**Also fixed, both found only by running the container:** `--fps 30.0` was
+rejected by HyperFrames ("Invalid fps") so no real board render ever succeeded,
+and `impromptu boards` wrote to `out/boards` while `render` reads
+`.cache/boards`, so the two documented halves of the workflow disagreed on a
+path. Both had passing unit tests.
 
 **Lesson worth keeping:** ten defects were found in this audit. Six of them —
 the compositor's missing transitions and PiP, the board HTML reaching MLT, the

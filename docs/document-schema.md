@@ -45,9 +45,10 @@ MLT remains an external subprocess under the MIT licence boundary.
 
 ## Phase status
 
-The document core and deterministic MLT generator are implemented and covered by tests.
-The CLI migration, reconciliation, boards, container, service, and UI are subsequent
-implementation phases from the v2 plan.
+The document core, deterministic MLT generator, migration, reconciliation, directing,
+board contracts, CLI, service, UI, and packaging paths are implemented and covered by
+tests. The Fedora/HyperFrames container remains an integration artifact and must be
+verified in an environment that permits package post-install ownership changes.
 
 ## Compatibility note
 
@@ -76,11 +77,13 @@ The repository currently keeps runtime dependencies minimal; the YAML document l
 uses the already-installed PyYAML package and will be declared in the container/project
 metadata during the container phase.
 
-## Next phases
+## Verification boundary
 
-The remaining phases implement `migrate`, fixture-driven Whisper reconciliation, board
+The implemented paths include `migrate`, fixture-driven Whisper reconciliation, board
 rendering with a one-frame duration guard, the Fedora container/quadlet, and the local
-FastAPI/FastMCP studio server described in the plan.
+FastAPI/FastMCP studio server described in the plan. Unit and contract checks pass; the
+full container build is currently blocked in the nested build host by package
+post-install ownership errors, so the image is not claimed as verified.
 
 ## Source plan
 

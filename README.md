@@ -96,10 +96,22 @@ python3 -m pytest tests/ -q
 ### Local studio server
 
 The optional Phase 5 web/MCP stack runs with `uv sync --extra web` followed by
-`impromptu serve --videos "$HOME/workspace/videos"`. It serves `/healthz`, the
-production directory/upload API, a minimal WebSocket teleprompter, and `/mcp`
-when FastMCP is installed. See `docs/studio.md`; the container build is not
-claimed verified until `podman build` completes.
+`impromptu serve --videos "$HOME/workspace/videos"` (or set
+`IMPROMPTU_PRODUCTIONS`). It serves `/healthz`, the production
+directory/upload API, a WebSocket teleprompter, `/remote` for the phone remote,
+and `/mcp` when FastMCP is installed.
+
+Pair a phone with `impromptu pair` **while the studio is running**: the token is
+minted by the server that validates it, and the printed `/remote?token=...` URL
+opens the remote. Tokens are in-memory and expire after 10 minutes.
+
+MCP exposes 12 intent-shaped tools — `read_document`, `patch_document`,
+`reconcile_run`, `direct_run`, `scene_layout`, `drift_report`, `boards_build`,
+`render_start`, `package_run`, plus production discovery and validation. None
+of them uploads anything; `package_run` writes an upload checklist instead.
+
+See `docs/studio.md`, and `docs/v2-traceability.md` for what is verified by real
+execution versus still outstanding.
 
 ## License
 

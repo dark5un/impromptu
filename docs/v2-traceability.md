@@ -48,7 +48,7 @@ A static contract is **never** reported as runtime verification.
 | Scene-relative `segments` | `core/reconcile.py` | `test_leading_silence_anchors_...` | unit | complete |
 | Fixture-based tests, no CI inference | `tests/test_reconcile.py` | injected script | unit | complete |
 | `reconcile` CLI + drift report | `impromptu.py cmd_reconcile` | `tests/test_cli_v2.py` | unit | complete |
-| Real whisper.cpp inference | `core/reconcile.py` `_run_whisper` | — | **blocked** | `whisper-cli` is not on the host PATH; it is built into the container image (verified present there). No model blob is bundled, so end-to-end transcription was not run. |
+| Real whisper.cpp inference | `core/reconcile.py` `_run_whisper` | — | **runtime** | complete — `whisper-cli` with `ggml-tiny.en` transcribed three spoken sentences in the image; reconcile measured 4.08/4.40/3.52s against planned 4.0/4.5/3.5s |
 
 **Phase 2 defect found and fixed:** reconcile measured each scene from the
 previous scene's end, so a take with leading silence produced
@@ -68,7 +68,8 @@ rejects. Reconcile wrote documents its own loader refused to read.
 | Starter templates + vertical variants | `render/board.py render_template` | `tests/test_board.py` | unit | complete |
 | Local GSAP, no CDN | `render/board.py` template | `tests/test_board.py` | static | complete |
 | ProRes 4444 alpha composites in MLT | `render/mlt_xml.py` | frame inspection | runtime | complete |
-| Real HyperFrames board render | `render/board.py` | — | **blocked** | `hyperframes` and `bun` are absent from the host; the CLI is installed in the container image. The *artifact contract* (ProRes 4444 `yuva444p10le`, correct duration) was verified by feeding MLT an equivalent ffmpeg-produced ProRes 4444 file with real varying alpha. |
+| Local GSAP vendoring | `render/board.py vendor_gsap` | `tests/test_board.py` | runtime | complete |
+| Real HyperFrames board render | `render/board.py` | — | **runtime** | complete — HyperFrames 0.8.30 rendered `drift.html` in the image to ProRes 4444 `yuva444p12le`, 132 frames / 4.400s matching `measured_sec`, alpha varying 256-3773, four distinct frame hashes proving the GSAP timeline animates |
 
 ## Phase 4 — container
 
@@ -110,9 +111,28 @@ rejects. Reconcile wrote documents its own loader refused to read.
 | FastMCP mounted in-process | `api/mcp.py` | `test_mcp_has_explicit_optional_dependency_boundary` | runtime | mounts at `/mcp`; 3 tools listed |
 | Actionable error without FastMCP | `api/mcp.py _require_fastmcp` | same | unit | complete |
 | Productions root from environment | `api/http.py create_app` | `test_productions_root_is_configurable...` | runtime | complete |
-| Voice-following prompter | — | — | **not built** | The prompter is manual pause/resume/seek over WebSocket. Plan item 14 (fork `jlecomte/voice-activated-teleprompter`, voice-following scroll, phone-as-remote QR) is **not implemented**. `impromptu pair` prints a token and URL but no `/remote` route serves it. |
-| ~12 intent-shaped MCP tools | `api/mcp.py` | — | **partial** | 3 tools exist (`list_productions`, `validate_document`, `create_production`). The plan's `doc.patch`, `reconcile.run`, `direct.run`, `render.start`, `package.run` are absent. |
+| Voice-following prompter | — | — | **not built** | The prompter is manual pause/resume/seek/speed over WebSocket. Plan item 14's voice-following scroll (fork `jlecomte/voice-activated-teleprompter`) is **not implemented**. |
+| Phone remote + pairing | `core/pairing.py`, `/remote`, `/api/pair` | `tests/test_pairing.py` | runtime | complete — `impromptu pair` mints a token from the running studio and the printed URL opens the remote |
+| ~12 intent-shaped MCP tools | `api/mcp.py` | `tests/test_mcp_tools.py` | runtime | complete — 12 tools (`read_document`, `patch_document`, `reconcile_run`, `direct_run`, `scene_layout`, `drift_report`, `boards_build`, `render_start`, `package_run`, plus discovery/validation), exercised against the real end-to-end production |
 | Render queue with progress | — | — | **not built** | `render/melt.py` parses progress, but no queue or API surface exposes it. |
+
+## End-to-end chain (verified 2026-09-06)
+
+The whole loop was exercised once with real tools rather than fixtures, which
+is what surfaced the `hyperframes` bin, GSAP vendoring, 48kHz, and thumbnail
+defects — all four passed unit tests and would have failed on a real video.
+
+| Stage | Evidence |
+|---|---|
+| Spoken take | Three `flite` sentences concatenated to 11.77s, 48kHz |
+| Real transcription | `whisper-cli` + `ggml-tiny.en` in the image returned three segments |
+| `reconcile` | measured 4.08 / 4.40 / 3.52s; drift +0.08 / -0.10 / +0.02s |
+| `direct` | chose `corner` for the board scene, `fullscreen` either side |
+| Board authored to measurement | `data-duration="4.4"`, GSAP beats at 1.32s and 2.42s |
+| Real board render | HyperFrames 0.8.30 → ProRes 4444, 132 frames / 4.400s, alpha 256-3773 |
+| `render` | `mlt-melt` → 329 frames / 10.99s, 1920x1080, CFR 30 |
+| `package` | 48kHz master, 1280x720 thumbnail, chapters 00:00 / 00:04 / 00:08 |
+| Frame inspection | presenter fullscreen → PiP with board → bars animating 0→18% and 0→35→94% → fullscreen outro |
 
 ## Deferred by the source plan (correctly not built)
 
@@ -124,15 +144,23 @@ path remains available as `impromptu tts`).
 
 ## Honest summary
 
-**Verified by real execution:** the MLT compositor (transitions, PiP, z-order,
-alpha, frame-exact programme length), the document/migrate/reconcile core, the
-board artifact and caching contracts, the container image build and its
-binaries, and the full HTTP + WebSocket + MCP surface.
+**Verified by real execution:** the full production chain, end to end, with
+real tools — spoken take → whisper transcription → reconcile → direct → board
+authored to the measurement → HyperFrames browser render → MLT composite →
+package, with the output inspected frame by frame. Plus the MLT compositor
+(transitions, PiP, z-order, alpha, frame-exact length), the container image and
+its binaries, and the HTTP + WebSocket + MCP + pairing surface.
 
-**Blocked, with named blockers:** real whisper transcription and a real
-HyperFrames browser render (both tools live in the container, not on the host);
-starting the quadlet as a live user service.
+**Blocked, with a named blocker:** starting the quadlet as a live systemd user
+service, which would install a unit into the user's environment. The image
+builds and was run directly instead.
 
-**Genuinely incomplete:** Phase 5's voice-following teleprompter, the phone
-remote route, the render queue, and 9 of the 12 planned MCP tools. These are
-the honest remaining gaps against the source plan.
+**Genuinely incomplete:** voice-following prompter scroll and the render queue.
+These are the honest remaining gaps against the source plan.
+
+**Lesson worth keeping:** ten defects were found in this audit. Six of them —
+the compositor's missing transitions and PiP, the board HTML reaching MLT, the
+broken `hyperframes` bin, unvendored GSAP, and the 48kHz regression — passed a
+green test suite and were only exposed by running real tools and looking at
+real output. Frame counts were not enough; several bugs rendered "successfully"
+and were only visible in the pixels.

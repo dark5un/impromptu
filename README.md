@@ -287,4 +287,11 @@ socket/queue contracts, and the vendored speech matcher.
 
 ## License
 
-MIT — Panagiotis Xynos (hi@onlyascii.io)
+impromptu is **MIT** — Panagiotis Xynos (hi@onlyascii.io). See `LICENSE`.
+
+impromptu's own code stays MIT because it invokes LLM/rendering tooling as
+subprocesses rather than linking it: MLT's `mlt-melt` (GPL-2+) and the
+libx264-enabled ffmpeg (GPL-2+) are run as separate programs, never linked.
+Full traceability of every bundled and invoked dependency — including GSAP,
+which is under the GreenSock Standard "No-Charge" license and is **not** an
+opensource license — is in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

@@ -64,6 +64,13 @@ Shorts: `build-hf --vertical` re-layouts to 1080x1920; for Mode A, crop the
 landscape master with ffmpeg (`crop=1080:1920`). Upload is MANUAL —
 `package` writes `upload-checklist.md`, never uploads.
 
+## v2 production document
+
+The first v2 vertical slice uses `production.yaml` as the single editable document.
+It is validated with `core.document`, and `render.mlt_xml` generates named-track MLT
+XML without linking libmlt. See `docs/document-schema.md` for the normative schema.
+The existing v1 commands remain available during the incremental migration.
+
 ## Tests
 
 ```

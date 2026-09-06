@@ -71,8 +71,8 @@ def test_build_boards_renders_named_board_entries_and_caches(tmp_path):
     def runner(command, check):
         calls.append((command, check))
         Path(command[command.index("--output") + 1]).write_bytes(b"mov")
-    first = build_boards(document, root=tmp_path, runner=runner)
-    second = build_boards(document, root=tmp_path, runner=runner)
+    first = build_boards(document, root=tmp_path, runner=runner, vendor=False)
+    second = build_boards(document, root=tmp_path, runner=runner, vendor=False)
     assert first["chart"].suffix == ".mov"
     assert second == first
     assert len(calls) == 1
@@ -119,3 +119,42 @@ def test_cli_exposes_boards_command(monkeypatch, capsys):
 
 
 __all__ = []
+
+
+# ── offline GSAP vendoring ───────────────────────────────────────────────────
+
+def test_vendor_gsap_stages_the_local_asset(tmp_path):
+    """Boards load /vendor/gsap.min.js; the file must exist beside them.
+
+    Proven by a real render: without it HyperFrames reaches 75%, launches
+    Chrome, then aborts with sub_timeline_script_failure because the stock
+    template's cdn.jsdelivr.net URL is unreachable in the container.
+    """
+    from render.board import vendor_gsap
+
+    source = tmp_path / "src" / "gsap.min.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("/* gsap */")
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    staged = vendor_gsap(project, source=source)
+
+    assert staged == project / "vendor" / "gsap.min.js"
+    assert staged.read_text() == "/* gsap */"
+
+
+def test_vendor_gsap_reports_a_missing_source(tmp_path):
+    from render.board import BoardError, vendor_gsap
+
+    with pytest.raises(BoardError, match="gsap"):
+        vendor_gsap(tmp_path, source=tmp_path / "absent" / "gsap.min.js")
+
+
+def test_starter_templates_reference_the_local_vendor_path():
+    from render.board import STARTER_TEMPLATES, render_template
+
+    for name in STARTER_TEMPLATES:
+        html = render_template(name, duration=3.0)
+        assert "/vendor/gsap.min.js" in html
+        assert "jsdelivr" not in html, "a CDN link cannot render offline"

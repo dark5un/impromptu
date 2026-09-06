@@ -135,11 +135,19 @@ def package_production(
     if command_runner is None:
         import subprocess
         command_runner = subprocess.run
-    command_runner(["ffmpeg", "-y", "-i", str(master), "-af",
-                    "loudnorm=I=-14:TP=-1.5:LRA=11", str(loud)], check=True)
-    command_runner(["ffmpeg", "-y", "-i", str(master), "-frames:v", "1",
-                    "-vf", "scale=1280:720", "-metadata", "thumbnail=1",
-                    str(thumbnail)], check=True)
+    command_runner([
+        "ffmpeg", "-y", "-i", str(master),
+        "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+        # loudnorm's output is 192kHz internally; without an explicit rate
+        # ffmpeg picks the encoder's nearest supported value (96kHz observed)
+        # and the master drifts off the documented 48kHz deliverable.
+        "-ar", "48000", "-c:v", "copy", "-movflags", "+faststart",
+        str(loud),
+    ], check=True)
+    command_runner([
+        "ffmpeg", "-y", "-i", str(master), "-frames:v", "1", "-update", "1",
+        "-vf", "scale=1280:720", str(thumbnail),
+    ], check=True)
     chapters.write_text(_chapters(document))
     description.write_text(f"# {document['title']}\n\nSee chapters.txt for chapter markers.\n")
     checklist.write_text(_checklist(document["title"]))

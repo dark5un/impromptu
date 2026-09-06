@@ -57,7 +57,7 @@ def test_container_and_quadlet_contracts():
     assert "whisper" in container.lower()
     assert "chrome-headless-shell" in container
     assert "PRODUCER_HEADLESS_SHELL_PATH" in container
-    assert "COPY --from=hyperframes-render /usr/local/bin/hyperframes" in container
+    assert "COPY --from=hyperframes-render /usr/local/lib/node_modules" in container
     assert "ARG TARGETARCH" in container
     assert "PublishPort=127.0.0.1:8787" in quadlet
     assert "Network=ai.network" in quadlet
@@ -77,6 +77,21 @@ def test_headless_shell_path_is_resolved_not_a_stale_literal():
     # the path must be discovered at build time and symlinked to a stable name
     assert "ln -sf" in container
     assert "/usr/local/bin/chrome-headless-shell" in container
+
+
+def test_hyperframes_bin_is_a_symlink_not_a_flattened_copy():
+    """Regression: the CLI was dead on arrival in the image.
+
+    `COPY /usr/local/bin/hyperframes` flattens npm's symlink into a plain file,
+    so its relative `../dist/...` imports resolve against /usr/local/ and the
+    CLI dies with ERR_MODULE_NOT_FOUND for /usr/local/dist/runtimeVersion.js.
+    The bin must be re-linked into the package directory, and the build must
+    smoke-test it so a broken CLI cannot ship.
+    """
+    container = (ROOT / "containers/Containerfile").read_text()
+    assert "COPY --from=hyperframes-render /usr/local/bin/hyperframes" not in container
+    assert "ln -sf" in container
+    assert "hyperframes --version" in container, "build must smoke-test the CLI"
 
 
 def test_whisper_build_failure_is_not_swallowed():

@@ -17,6 +17,16 @@ RUN apt-get -o APT::Sandbox::User=root update && apt-get -o APT::Sandbox::User=r
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium CONTAINER=true
 RUN if [ "$TARGETARCH" = "amd64" ]; then npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path /root/.cache/puppeteer; else npx --yes playwright-core@${PLAYWRIGHT_VERSION} install chromium-headless-shell; fi
 RUN npm install -g hyperframes@${HYPERFRAMES_VERSION}
+# Vendor GSAP into the image. Boards must load /vendor/gsap.min.js locally: the
+# stock blank template points at cdn.jsdelivr.net, which fails in an offline
+# container and aborts the render with sub_timeline_script_failure.
+RUN mkdir -p /tmp/gsap-fetch \
+    && cd /tmp/gsap-fetch \
+    && npm install --no-save --prefix /tmp/gsap-fetch gsap@3 \
+    && mkdir -p /opt/impromptu/vendor \
+    && cp /tmp/gsap-fetch/node_modules/gsap/dist/gsap.min.js /opt/impromptu/vendor/gsap.min.js \
+    && test -s /opt/impromptu/vendor/gsap.min.js \
+    && rm -rf /tmp/gsap-fetch
 RUN SHELL_PATH=$(find /root/.cache/puppeteer /root/.cache/ms-playwright \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -1) && test -n "$SHELL_PATH" && printf '%s\n' '#!/bin/sh' "export PRODUCER_HEADLESS_SHELL_PATH=$SHELL_PATH" 'exec hyperframes render "$@"' > /usr/local/bin/hf-render && chmod +x /usr/local/bin/hf-render
 
 FROM studio
@@ -42,10 +52,19 @@ RUN git clone --depth 1 --branch ${WHISPER_CPP_REF} https://github.com/ggerganov
 # supply the shared libraries; if a cross-distro browser fails, the build fails.
 COPY --from=hyperframes-render /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=hyperframes-render /usr/local/bin/hf-render /usr/local/bin/hf-render
-COPY --from=hyperframes-render /usr/local/bin/hyperframes /usr/local/bin/hyperframes
 COPY --from=hyperframes-render /root/.cache /root/.cache
 COPY --from=hyperframes-render /usr/local/bin/node /usr/local/bin/node
-ENV PATH=/usr/local/bin:$PATH NODE_PATH=/usr/local/lib/node_modules
+COPY --from=hyperframes-render /opt/impromptu/vendor /opt/impromptu/vendor
+ENV PATH=/usr/local/bin:$PATH NODE_PATH=/usr/local/lib/node_modules \
+    IMPROMPTU_VENDOR=/opt/impromptu/vendor
+# Recreate npm's bin symlink rather than COPYing /usr/local/bin/hyperframes.
+# A plain-file copy resolves its relative `../dist/...` imports against
+# /usr/local/ instead of the package directory, so the CLI dies with
+# ERR_MODULE_NOT_FOUND for /usr/local/dist/runtimeVersion.js.
+RUN HF_BIN=$(node -e "const p=require('/usr/local/lib/node_modules/hyperframes/package.json');const b=p.bin;process.stdout.write(typeof b==='string'?b:b.hyperframes||Object.values(b)[0])") \
+    && ln -sf "/usr/local/lib/node_modules/hyperframes/$HF_BIN" /usr/local/bin/hyperframes \
+    && chmod +x "/usr/local/lib/node_modules/hyperframes/$HF_BIN" \
+    && hyperframes --version
 # Resolve the browser once at build time and bake it into the image
 # environment, so calling `hyperframes` directly (not just the hf-render
 # wrapper) still finds the pinned shell and uses BeginFrame capture.  A stale

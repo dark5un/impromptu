@@ -106,3 +106,36 @@ def test_render_and_package_require_production_yaml(tmp_path):
         render_production(tmp_path)
     with pytest.raises(FileNotFoundError):
         package_production(tmp_path)
+
+
+def test_package_preserves_48khz_audio_and_single_thumbnail(tmp_path, production):
+    """Regression, found by a real render: loudnorm resampled 48kHz -> 96kHz.
+
+    docs/decisions.md specifies a 48kHz deliverable. loudnorm runs at 192kHz
+    internally, so without an explicit -ar ffmpeg falls back to the encoder's
+    nearest rate. The thumbnail also needs -update 1 or ffmpeg treats the path
+    as an image sequence and only succeeds incidentally.
+    """
+    import yaml
+
+    (tmp_path / "production.yaml").write_text(yaml.safe_dump(production, sort_keys=False))
+    master = tmp_path / "out" / "master.mp4"
+    master.parent.mkdir()
+    master.write_bytes(b"master")
+    commands = []
+
+    def command_runner(command, check=True):
+        commands.append(command)
+        if "loudnorm" in " ".join(command):
+            (tmp_path / "out" / "master-loudnorm.mp4").write_bytes(b"loud")
+        elif "thumbnail" in " ".join(command):
+            (tmp_path / "out" / "thumbnail.png").write_bytes(b"png")
+
+    package_production(tmp_path, runner=command_runner)
+
+    loudnorm = next(c for c in commands if "loudnorm" in " ".join(c))
+    assert "-ar" in loudnorm
+    assert loudnorm[loudnorm.index("-ar") + 1] == "48000"
+
+    thumb = next(c for c in commands if "thumbnail" in " ".join(c))
+    assert "-update" in thumb, "ffmpeg needs -update 1 for a single still"

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import html as html_lib
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -87,6 +88,31 @@ def hyperframes_command(board: str | Path, output: str | Path, fps: float = 30) 
     ]
 
 
+def vendor_gsap(project: str | Path, *, source: str | Path | None = None) -> Path:
+    """Stage GSAP at ``<project>/vendor/gsap.min.js`` for an offline render.
+
+    Boards reference ``/vendor/gsap.min.js`` because the stock HyperFrames
+    template's ``cdn.jsdelivr.net`` URL is unreachable in the container: the
+    render reaches the capture stage, launches Chrome, then aborts with
+    ``sub_timeline_script_failure``.  The container bakes GSAP in and exports
+    ``IMPROMPTU_VENDOR``; *source* overrides that for tests and host runs.
+    """
+    if source is None:
+        base = os.environ.get("IMPROMPTU_VENDOR", "/opt/impromptu/vendor")
+        source = Path(base) / "gsap.min.js"
+    origin = Path(source)
+    if not origin.is_file():
+        raise BoardError(
+            f"vendored gsap.min.js not found at {origin}. Boards load "
+            "/vendor/gsap.min.js locally because the CDN is unreachable offline; "
+            "set IMPROMPTU_VENDOR to a directory containing gsap.min.js."
+        )
+    destination = Path(project) / "vendor" / "gsap.min.js"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(origin.read_bytes())
+    return destination
+
+
 def render_board(
     board: str | Path,
     cache_dir: str | Path,
@@ -95,6 +121,7 @@ def render_board(
     fps: float = 30,
     runner: Callable[..., Any] = subprocess.run,
     command: list[str] | None = None,
+    vendor: bool = True,
 ) -> Path:
     """Validate and render one board, returning its cached MOV artifact."""
     source = Path(board)
@@ -103,6 +130,10 @@ def render_board(
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and destination.stat().st_size > 0:
         return destination
+    # Boards reference /vendor/gsap.min.js; stage it beside the composition or
+    # the render aborts in Chrome with sub_timeline_script_failure.
+    if vendor:
+        vendor_gsap(source.parent)
     argv = command or hyperframes_command(source, destination, fps=fps)
     completed = runner(argv, check=True)
     if completed is not None and getattr(completed, "returncode", 0) not in (0, None):
@@ -118,6 +149,7 @@ def build_boards(
     root: str | Path = ".",
     cache_dir: str | Path | None = None,
     runner: Callable[..., Any] = subprocess.run,
+    vendor: bool = True,
 ) -> dict[str, Path]:
     """Build each named board referenced by a scene overlay exactly once."""
     root_path = Path(root)
@@ -135,7 +167,7 @@ def build_boards(
             raise BoardDurationError(f"board {name!r} requires scene measured_sec")
         result[name] = render_board(
             root_path / media["src"], cache, measured_sec=float(measured),
-            fps=float(document["target"]["fps"]), runner=runner,
+            fps=float(document["target"]["fps"]), runner=runner, vendor=vendor,
         )
     return result
 
@@ -204,4 +236,5 @@ __all__ = [
     "starter_template",
     "starter_templates",
     "validate_duration",
+    "vendor_gsap",
 ]

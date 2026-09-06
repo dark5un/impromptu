@@ -21,7 +21,7 @@ RUN SHELL_PATH=$(find /root/.cache/puppeteer /root/.cache/ms-playwright \( -name
 
 FROM studio
 ARG WHISPER_CPP_REF=master
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PRODUCER_HEADLESS_SHELL_PATH=/opt/chrome-headless-shell
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN dnf -y upgrade && dnf -y install \
     python3 python3-devel gcc gcc-c++ make cmake git curl \
     mlt mlt-qt6 ffmpeg-free fontconfig \
@@ -33,7 +33,8 @@ RUN dnf -y upgrade && dnf -y install \
 RUN git clone --depth 1 --branch ${WHISPER_CPP_REF} https://github.com/ggerganov/whisper.cpp.git /opt/whisper.cpp \
     && cmake -S /opt/whisper.cpp -B /opt/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF \
     && cmake --build /opt/whisper.cpp/build --config Release -j2 \
-    && ln -s /opt/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli || true \
+    && ln -s /opt/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli \
+    && whisper-cli --help >/dev/null 2>&1 || test -x /usr/local/bin/whisper-cli \
     && mkdir -p /models \
     && printf '%s\n' 'Mount ggml-base.en.bin at /models/ggml-base.en.bin; no model is bundled.' > /models/README
 
@@ -45,6 +46,16 @@ COPY --from=hyperframes-render /usr/local/bin/hyperframes /usr/local/bin/hyperfr
 COPY --from=hyperframes-render /root/.cache /root/.cache
 COPY --from=hyperframes-render /usr/local/bin/node /usr/local/bin/node
 ENV PATH=/usr/local/bin:$PATH NODE_PATH=/usr/local/lib/node_modules
+# Resolve the browser once at build time and bake it into the image
+# environment, so calling `hyperframes` directly (not just the hf-render
+# wrapper) still finds the pinned shell and uses BeginFrame capture.  A stale
+# literal path here silently disables it.
+RUN SHELL_PATH=$(find /root/.cache/puppeteer /root/.cache/ms-playwright \
+      \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -1) \
+    && test -n "$SHELL_PATH" \
+    && printf 'PRODUCER_HEADLESS_SHELL_PATH=%s\n' "$SHELL_PATH" >> /etc/environment \
+    && ln -sf "$SHELL_PATH" /usr/local/bin/chrome-headless-shell
+ENV PRODUCER_HEADLESS_SHELL_PATH=/usr/local/bin/chrome-headless-shell
 
 WORKDIR /app
 COPY . /app

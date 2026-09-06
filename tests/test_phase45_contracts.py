@@ -65,6 +65,42 @@ def test_container_and_quadlet_contracts():
     assert "%h/workspace/videos" in quadlet
 
 
+def test_headless_shell_path_is_resolved_not_a_stale_literal():
+    """Regression: ENV pointed at /opt/chrome-headless-shell, which never existed.
+
+    The wrapper script found the real browser but a direct `hyperframes` call
+    (which render/board.py makes) inherited the broken path and silently lost
+    BeginFrame capture.
+    """
+    container = (ROOT / "containers/Containerfile").read_text()
+    assert "PRODUCER_HEADLESS_SHELL_PATH=/opt/chrome-headless-shell" not in container
+    # the path must be discovered at build time and symlinked to a stable name
+    assert "ln -sf" in container
+    assert "/usr/local/bin/chrome-headless-shell" in container
+
+
+def test_whisper_build_failure_is_not_swallowed():
+    """`|| true` would ship an image whose reconcile silently cannot run."""
+    container = (ROOT / "containers/Containerfile").read_text()
+    assert "/usr/local/bin/whisper-cli || true" not in container
+
+
+def test_productions_root_is_configurable_by_environment(monkeypatch, tmp_path):
+    """The quadlet sets IMPROMPTU_PRODUCTIONS; the app must actually read it."""
+    http = importlib.import_module("api.http")
+    if http.FASTAPI_IMPORT_ERROR is not None:
+        pytest.skip("web extra not installed")
+    monkeypatch.setenv("IMPROMPTU_PRODUCTIONS", str(tmp_path / "prods"))
+    http.create_app()
+    assert (tmp_path / "prods").is_dir()
+
+
+def test_quadlet_productions_env_matches_its_volume_mount():
+    quadlet = (ROOT / "quadlets/studio.container").read_text()
+    assert "IMPROMPTU_PRODUCTIONS=/app/videos" in quadlet
+    assert ":/app/videos:Z" in quadlet
+
+
 def test_web_ui_contains_api_and_prompter_hooks():
     html = (ROOT / "web/index.html").read_text()
     js = (ROOT / "web/static/app.js").read_text()

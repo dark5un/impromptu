@@ -6,6 +6,7 @@ The pure filesystem helpers intentionally do not require FastAPI.  Install the
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -76,9 +77,16 @@ def _require_fastapi() -> None:
         ) from FASTAPI_IMPORT_ERROR
 
 
-def create_app(productions_root: str | Path = "videos", web_root: str | Path | None = None):
-    """Build the FastAPI app, or fail explicitly when the web extra is absent."""
+def create_app(productions_root: str | Path | None = None, web_root: str | Path | None = None):
+    """Build the FastAPI app, or fail explicitly when the web extra is absent.
+
+    The productions root defaults to ``$IMPROMPTU_PRODUCTIONS`` so the container
+    (which runs uvicorn directly against ``api.http:app``) serves the mounted
+    host volume rather than a throwaway ``./videos`` inside the image.
+    """
     _require_fastapi()
+    if productions_root is None:
+        productions_root = os.environ.get("IMPROMPTU_PRODUCTIONS", "videos")
     root = Path(productions_root)
     root.mkdir(parents=True, exist_ok=True)
     static_root = Path(web_root) if web_root else Path(__file__).parents[1] / "web"

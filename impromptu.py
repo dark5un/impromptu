@@ -1230,9 +1230,11 @@ def main():
         raise SystemExit(cmd_pair(args))
     if command == "serve":
         parser = argparse.ArgumentParser(prog="impromptu serve", description="Run the impromptu web UI and MCP server")
-        parser.add_argument("--videos", default="videos")
-        parser.add_argument("--host", default="127.0.0.1")
-        parser.add_argument("--port", type=int, default=8787)
+        parser.add_argument("--videos", default=os.environ.get("IMPROMPTU_PRODUCTIONS", "videos"),
+                            help="Productions root (default: $IMPROMPTU_PRODUCTIONS or ./videos)")
+        parser.add_argument("--host", default=os.environ.get("IMPROMPTU_HOST", "127.0.0.1"))
+        parser.add_argument("--port", type=int,
+                            default=int(os.environ.get("IMPROMPTU_PORT", "8787")))
         args = parser.parse_args(sys.argv[2:])
         raise SystemExit(cmd_serve(args))
     if command == "package":

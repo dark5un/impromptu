@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mlt LC_NUMERIC="C" version="7.36.1" profile="atsc_1080p_30">
+  <profile description="HD 1080p 30fps" width="1920" height="1080" progressive="1" sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="16" display_aspect_den="9" frame_rate_num="30" frame_rate_den="1" colorspace="709" />
+  <producer id="presenter">
+    <property name="resource">presenter.mp4</property>
+  </producer>
+  <producer id="ov_board">
+    <property name="resource">board.mp4</property>
+  </producer>
+  <playlist id="presenter_track">
+    <entry producer="presenter" in="0" out="299" />
+    <entry producer="presenter" in="300" out="599" />
+    <entry producer="presenter" in="600" out="899" />
+  </playlist>
+  <playlist id="overlay_track">
+    <blank length="300" />
+    <entry producer="ov_board" in="0" out="299" />
+  </playlist>
+  <tractor id="main" global_feed="1">
+    <track producer="presenter_track" />
+    <track producer="overlay_track" />
+    <transition id="pip">
+      <property name="mlt_service">qtblend</property>
+      <property name="a_track">0</property>
+      <property name="b_track">1</property>
+      <property name="rect">70%/68%:25%x25%:1</property>
+      <property name="compositing">1</property>
+    </transition>
+    <transition id="amix">
+      <property name="mlt_service">mix</property>
+      <property name="a_track">0</property>
+      <property name="b_track">1</property>
+      <property name="sum">1</property>
+    </transition>
+  </tractor>
+</mlt>

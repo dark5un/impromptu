@@ -79,9 +79,11 @@ def board_cache_path(board: str | Path, cache_dir: str | Path, duration: float) 
 
 def hyperframes_command(board: str | Path, output: str | Path, fps: float = 30) -> list[str]:
     """Build the subprocess argv for a transparent ProRes MOV board render."""
+    source = Path(board)
     return [
-        "hyperframes", "render", str(board), "--output", str(output),
-        "--format", "mov", "--fps", str(fps),
+        "hyperframes", "render", str(source.parent),
+        "--composition", source.name,
+        "--output", str(output), "--format", "mov", "--fps", str(fps),
     ]
 
 

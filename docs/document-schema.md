@@ -91,8 +91,8 @@ post-install ownership errors, so the image is not claimed as verified.
 
 ## Status
 
-This file tracks the first shipped vertical slice, not a promise that all plan phases
-are already complete.
+This file documents the implemented v2 vertical slice and its verification boundary;
+the container image remains unverified in the current nested build host.
 
 ## Notes
 

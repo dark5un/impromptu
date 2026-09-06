@@ -41,7 +41,7 @@ def test_starter_templates_are_named_factories():
 def test_hyperframes_command_uses_mov_and_fps(tmp_path):
     command = hyperframes_command(tmp_path / "board.html", tmp_path / "board.mov", 30)
     assert command == [
-        "hyperframes", "render", str(tmp_path / "board.html"),
+        "hyperframes", "render", str(tmp_path), "--composition", "board.html",
         "--output", str(tmp_path / "board.mov"), "--format", "mov", "--fps", "30",
     ]
 

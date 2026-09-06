@@ -1143,12 +1143,37 @@ def cmd_package_document(args):
 
 
 def cmd_pair(args):
-    import secrets
+    """Mint a pairing token from a RUNNING studio, or explain why it cannot.
+
+    The token must come from the server process that will validate it: an
+    in-process token would be unknown to the server and its URL would 403.
+    """
+    import json as _json
+    import urllib.error
     import urllib.parse
-    token = secrets.token_urlsafe(18)
-    url = f"http://{args.host}:{args.port}/remote?{urllib.parse.urlencode({'token': token})}"
+    import urllib.request
+
+    base = f"http://{args.host}:{args.port}"
+    try:
+        with urllib.request.urlopen(f"{base}/api/pair", data=b"", timeout=5) as response:
+            payload = _json.loads(response.read())
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"❌ could not reach the studio at {base}: {exc}")
+        print("   Start it first with `impromptu serve`, then run `impromptu pair` again.")
+        return 1
+    token = payload["token"]
+    url = f"{base}/remote?{urllib.parse.urlencode({'token': token})}"
     print(f"Pairing token: {token}")
     print(f"Remote URL: {url}")
+    print(f"Valid for {payload.get('ttl_seconds', 600)}s while `impromptu serve` keeps running.")
+    try:
+        import qrcode
+    except ImportError:
+        print("(install `qrcode` to print a scannable QR code)")
+    else:
+        code = qrcode.QRCode(border=1)
+        code.add_data(url)
+        code.print_ascii(invert=True)
     return 0
 
 

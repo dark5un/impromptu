@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from core.document import validate_document
+from core.pairing import DEFAULT_TTL_SECONDS, PairingStore
 
 try:  # Optional so document helpers remain usable in the base CLI install.
     from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket
@@ -77,12 +78,16 @@ def _require_fastapi() -> None:
         ) from FASTAPI_IMPORT_ERROR
 
 
-def create_app(productions_root: str | Path | None = None, web_root: str | Path | None = None):
+def create_app(productions_root: str | Path | None = None, web_root: str | Path | None = None,
+               *, require_pairing: bool = False):
     """Build the FastAPI app, or fail explicitly when the web extra is absent.
 
     The productions root defaults to ``$IMPROMPTU_PRODUCTIONS`` so the container
     (which runs uvicorn directly against ``api.http:app``) serves the mounted
     host volume rather than a throwaway ``./videos`` inside the image.
+
+    *require_pairing* additionally gates the teleprompter socket on a token, for
+    when the studio is reachable from more than localhost.
     """
     _require_fastapi()
     if productions_root is None:
@@ -98,12 +103,19 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
         # REST and the UI remain useful without the optional FastMCP package.
         pass
     app = FastAPI(title="impromptu studio", lifespan=mcp_app.lifespan if mcp_app else None)
+    app.state.pairing = PairingStore()
+    app.state.require_pairing = require_pairing
     if mcp_app is not None:
         app.mount("/mcp", mcp_app)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/api/pair", status_code=201)
+    async def pair() -> dict[str, Any]:
+        """Mint a pairing token for the phone remote."""
+        return {"token": app.state.pairing.issue(), "ttl_seconds": DEFAULT_TTL_SECONDS}
 
     @app.get("/api/productions")
     async def productions() -> list[dict[str, str]]:
@@ -145,8 +157,14 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
 
     @app.websocket("/ws/teleprompter/{name}")
     async def teleprompter(websocket: WebSocket, name: str) -> None:
+        if app.state.require_pairing and not app.state.pairing.validate(
+                websocket.query_params.get("token")):
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
-        await websocket.send_json({"type": "ready", "production": name, "paused": False, "position": 0})
+        speed = 1.5
+        await websocket.send_json({"type": "ready", "production": name, "paused": False,
+                                   "position": 0, "speed": speed})
         paused = False
         position = 0
         try:
@@ -161,7 +179,11 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
                     paused = not paused
                 elif action == "seek":
                     position = max(0, int(message.get("position", position)))
-                await websocket.send_json({"type": "state", "paused": paused, "position": position})
+                elif action == "speed":
+                    # Clamped to the same range as the terminal prompter.
+                    speed = max(0.3, min(10.0, float(message.get("speed", speed))))
+                await websocket.send_json({"type": "state", "paused": paused,
+                                           "position": position, "speed": speed})
         except Exception:
             return
 
@@ -171,6 +193,23 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
         @app.get("/")
         async def index():
             return FileResponse(static_root / "index.html")
+
+        @app.get("/remote")
+        async def remote(token: str | None = None):
+            """Serve the phone remote for a token minted by `impromptu pair`.
+
+            A missing token is 401 (you did not present one) and an unknown or
+            expired token is 403 (you presented one and it is not valid), so the
+            failure tells you which mistake you made.
+            """
+            if not token:
+                raise HTTPException(status_code=401, detail="pairing token required")
+            if not app.state.pairing.validate(token):
+                raise HTTPException(status_code=403, detail="invalid or expired pairing token")
+            remote_page = static_root / "remote.html"
+            if not remote_page.is_file():
+                raise HTTPException(status_code=404, detail="remote UI is not installed")
+            return FileResponse(remote_page)
 
     return app
 

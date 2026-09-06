@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+  <title>impromptu remote</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #0b0e0f; color: #e5e7eb;
+           display: flex; flex-direction: column; gap: 1rem; padding: 1rem; }
+    h1 { font-size: 1rem; margin: 0; color: #9ca3af; font-weight: 400; }
+    #state { color: #5af78e; font-variant-numeric: tabular-nums; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; flex: 1; }
+    /* Touch targets sized for a phone held while presenting. */
+    button { font-size: 1.25rem; padding: 1.5rem .5rem; border-radius: .6rem;
+             border: 1px solid #374151; background: #1f2937; color: inherit; }
+    button:active { background: #5af78e; color: #0b0e0f; }
+    #toggle { grid-column: 1 / -1; font-size: 1.75rem; }
+  </style>
+</head>
+<body>
+  <h1>impromptu remote · <span id="state">connecting…</span></h1>
+  <div class="grid">
+    <button id="toggle">Pause / Resume</button>
+    <button id="back">▲ Back</button>
+    <button id="fwd">▼ Forward</button>
+    <button id="slower">− Slower</button>
+    <button id="faster">+ Faster</button>
+  </div>
+  <script type="module" src="/static/remote.js"></script>
+</body>
+</html>

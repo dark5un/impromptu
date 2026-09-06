@@ -22,6 +22,11 @@ import time
 import tty
 from pathlib import Path
 
+from core.document import DocumentError, load_document
+from core.migrate import migrate_v1
+from core.reconcile import reconcile_document
+from render.board import BoardError, render_document_boards
+from render.melt import MeltError
 
 # ═══════════════════════════════════════════════════════════════════════
 # TELEPROMPTER
@@ -33,7 +38,7 @@ def get_terminal_size():
 
 def read_script(path):
     with open(path) as f:
-        return [line.rstrip('\n') for line in f.readlines()]
+        return [line.rstrip('\n') for line in f]
 
 
 def enable_raw_mode():
@@ -87,7 +92,7 @@ def _run(lines, start_speed):
         pct = int(idx / max(n - 1, 1) * 100)
         status = "⏸ PAUSED" if paused else "▶"
         hdr = f"\033[90m── impromptu [{status}] line {idx+1}/{n} ({pct}%) speed:{speed:.1f} ──\033[0m\n"
-        ft = f"\n\033[90mSpace:pause ↑↓:move +/-:speed 0:top q:quit\033[0m"
+        ft = "\n\033[90mSpace:pause ↑↓:move +/-:speed 0:top q:quit\033[0m"
         sys.stdout.write("\033[H" + hdr + "\n".join(out) + ft)
         sys.stdout.flush()
 
@@ -438,7 +443,7 @@ def pick_video_encoder():
                          ("h264_nvenc", []),
                          ("h264_qsv", []),
                          ("mpeg4", [])):
-        if re.search(rf"^\s*\S+\s+{codec}\b", encs, re.M):
+        if re.search(rf"^\s*\S+\s+{codec}\b", encs, re.MULTILINE):
             return codec, extra
     return "mpeg4", []
 
@@ -572,10 +577,10 @@ def _hf_pip_css(sc, W, H):
     pip_h = int(pip_w * 9 / 16)
     pos = sc.get("pip_position", "bottom-right")
     css_pos = {
-        "bottom-right": f"right: 30px; bottom: 30px;",
-        "bottom-left": f"left: 30px; bottom: 30px;",
-        "top-right": f"right: 30px; top: 30px;",
-        "top-left": f"left: 30px; top: 30px;",
+        "bottom-right": "right: 30px; bottom: 30px;",
+        "bottom-left": "left: 30px; bottom: 30px;",
+        "top-right": "right: 30px; top: 30px;",
+        "top-left": "left: 30px; top: 30px;",
     }[pos] if pos in PIP_POSITIONS else "right: 30px; bottom: 30px;"
     return (f"position: absolute; {css_pos} width: {pip_w}px; height: {pip_h}px;"
             f" object-fit: cover; border-radius: 16px;"
@@ -1018,7 +1023,7 @@ def cmd_composite(args):
             "-pix_fmt", "yuv420p", "-r", str(fps),
             str(Path(args.output))]
 
-    print(f"\n Rendering...")
+    print("\n Rendering...")
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print("❌ FFmpeg failed:")
@@ -1033,10 +1038,209 @@ def cmd_composite(args):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# V2 DOCUMENT COMMANDS
+# ═══════════════════════════════════════════════════════════════════════
+
+def _production_path(directory):
+    path = Path(directory)
+    return path if path.is_file() else path / "production.yaml"
+
+
+def cmd_validate(args):
+    try:
+        load_document(_production_path(args.directory))
+    except (DocumentError, OSError) as exc:
+        print(f"❌ invalid production document: {exc}")
+        return 1
+    print(f"✓ Valid production document: {_production_path(args.directory)}")
+    return 0
+
+
+def cmd_migrate(args):
+    source = Path(args.v1_dir)
+    output_dir = Path(args.out_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / "production.yaml"
+    try:
+        migrate_v1(source / "script.md", source / "scene-plan.json", output)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"❌ migration failed: {exc}")
+        return 1
+    print(f"✓ Wrote {output}")
+    return 0
+
+
+def cmd_reconcile(args):
+    directory = Path(args.directory)
+    try:
+        result = reconcile_document(_production_path(directory), transcript_json=args.transcript_json,
+                                    take=args.take, whisper_command=args.whisper_command)
+    except (OSError, ValueError, DocumentError, subprocess.CalledProcessError) as exc:
+        print(f"❌ reconciliation failed: {exc}")
+        return 1
+    print(f"✓ Reconciled {_production_path(directory)}")
+    report = ["# Reconciliation drift", "", "| Scene | Planned | Measured | Drift |", "|---|---:|---:|---:|"]
+    for item in result["drift"]:
+        report.append(f"| {item['scene']} | {item['planned_sec']:.2f}s | "
+                      f"{item['measured_sec']:.2f}s | {item['delta_sec']:+.2f}s |")
+        print(f"  {item['scene']}: planned {item['planned_sec']:.2f}s, "
+              f"measured {item['measured_sec']:.2f}s, drift {item['delta_sec']:+.2f}s")
+    report_path = directory if directory.is_dir() else directory.parent
+    (report_path / "drift-report.md").write_text("\n".join(report) + "\n")
+    print(f"✓ Wrote {report_path / 'drift-report.md'}")
+    return 0
+
+
+def cmd_boards(args):
+    directory = Path(args.directory)
+    try:
+        document = load_document(_production_path(directory))
+        rendered = render_document_boards(document, directory, directory / "out" / "boards")
+    except (DocumentError, BoardError, OSError) as exc:
+        print(f"❌ board rendering failed: {exc}")
+        return 1
+    for name, path in rendered.items():
+        print(f"✓ {name} → {path}")
+    print(f"✅ Rendered {len(rendered)} board(s)")
+    return 0
+
+
+def cmd_render_document(args):
+    from render.pipeline import render_production
+
+    directory = Path(args.directory)
+    try:
+        output = render_production(directory, threads=args.threads)
+        if args.output:
+            requested = Path(args.output)
+            requested.parent.mkdir(parents=True, exist_ok=True)
+            output.replace(requested)
+            output = requested
+    except (DocumentError, MeltError, OSError) as exc:
+        print(f"❌ render failed: {exc}")
+        return 1
+    print(f"✅ Rendered {output}")
+    return 0
+
+
+def cmd_package_document(args):
+    from render import pipeline
+
+    try:
+        result = pipeline.package_production(args.directory)
+    except (DocumentError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"❌ package failed: {exc}")
+        return 1
+    for name, path in result.items():
+        print(f"✓ {name}: {path}")
+    return 0
+
+
+def cmd_pair(args):
+    import secrets
+    import urllib.parse
+    token = secrets.token_urlsafe(18)
+    url = f"http://{args.host}:{args.port}/remote?{urllib.parse.urlencode({'token': token})}"
+    print(f"Pairing token: {token}")
+    print(f"Remote URL: {url}")
+    return 0
+
+
+def cmd_serve(args):
+    try:
+        import uvicorn
+
+        from api.http import create_app
+        app = create_app(args.videos)
+    except (ImportError, RuntimeError, OSError) as exc:
+        print(f"❌ serve unavailable: {exc}")
+        return 1
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+def cmd_direct(args):
+    """Apply the deterministic directing pass to production.yaml."""
+    try:
+        from core.direct import direct_production
+        path = _production_path(args.directory)
+        direct_production(path)
+    except (DocumentError, OSError, ValueError, ImportError) as exc:
+        print(f"❌ directing failed: {exc}")
+        return 1
+    print(f"✓ Directed {path}")
+    return 0
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════
 
 def main():
+    command = sys.argv[1] if len(sys.argv) > 1 else None
+    if command == "validate":
+        parser = argparse.ArgumentParser(prog="impromptu validate", description="Validate a v2 production document")
+        parser.add_argument("directory")
+        args = parser.parse_args(sys.argv[2:])
+        raise SystemExit(cmd_validate(args))
+    if command == "migrate":
+        parser = argparse.ArgumentParser(prog="impromptu migrate", description="Migrate v1 files to production.yaml")
+        parser.add_argument("v1_dir")
+        parser.add_argument("out_dir")
+        args = parser.parse_args(sys.argv[2:])
+        raise SystemExit(cmd_migrate(args))
+    if command == "reconcile":
+        parser = argparse.ArgumentParser(prog="impromptu reconcile", description="Reconcile a take with the script")
+        parser.add_argument("directory")
+        parser.add_argument("-t", "--take")
+        parser.add_argument("--transcript-json")
+        parser.add_argument("--whisper-command", nargs="+")
+        args = parser.parse_args(sys.argv[2:])
+        raise SystemExit(cmd_reconcile(args))
+    if command == "direct":
+        parser = argparse.ArgumentParser(prog="impromptu direct", description="Direct scenes and transitions in a production document")
+        parser.add_argument("directory", help="Production directory or production.yaml")
+        raise SystemExit(cmd_direct(parser.parse_args(sys.argv[2:])))
+    if command == "boards":
+        parser = argparse.ArgumentParser(prog="impromptu boards", description="Render measured HyperFrames boards")
+        parser.add_argument("directory")
+        args = parser.parse_args(sys.argv[2:])
+        raise SystemExit(cmd_boards(args))
+    if command == "render":
+        parser = argparse.ArgumentParser(prog="impromptu render", description="Render the v2 production with MLT")
+        parser.add_argument("directory")
+        parser.add_argument("--output")
+        parser.add_argument("--vertical", action="store_true", help="reserved for vertical target documents")
+        parser.add_argument("--threads", type=int, default=1)
+        args = parser.parse_args(sys.argv[2:])
+        raise SystemExit(cmd_render_document(args))
+    if command == "pair":
+        parser = argparse.ArgumentParser(prog="impromptu pair", description="Create a phone remote pairing token")
+        parser.add_argument("--host", default="127.0.0.1")
+        parser.add_argument("--port", type=int, default=8787)
+        args = parser.parse_args(sys.argv[2:])
+        raise SystemExit(cmd_pair(args))
+    if command == "serve":
+        parser = argparse.ArgumentParser(prog="impromptu serve", description="Run the impromptu web UI and MCP server")
+        parser.add_argument("--videos", default="videos")
+        parser.add_argument("--host", default="127.0.0.1")
+        parser.add_argument("--port", type=int, default=8787)
+        args = parser.parse_args(sys.argv[2:])
+        raise SystemExit(cmd_serve(args))
+    if command == "package":
+        parser = argparse.ArgumentParser(prog="impromptu package", description="Package a production directory or final video")
+        parser.add_argument("video", help="Production directory or final video")
+        parser.add_argument("--plan", default=None, help="Legacy scene plan JSON")
+        parser.add_argument("--out-dir", "-o", default="out", help="Packaging output directory")
+        parser.add_argument("--thumbnail-time", type=float, default=5.0)
+        parser.add_argument("--no-thumbnail", action="store_true")
+        parser.add_argument("--transcribe", action="store_true")
+        args = parser.parse_args(sys.argv[2:])
+        target = Path(args.video)
+        if target.is_dir() and (target / "production.yaml").exists():
+            raise SystemExit(cmd_package_document(argparse.Namespace(directory=str(target))))
+        cmd_package(args)
+        return
+
     if len(sys.argv) > 1 and sys.argv[1] == "new":
         parser = argparse.ArgumentParser(prog="impromptu new")
         parser.add_argument("path", nargs="?", default="script.md")

@@ -68,8 +68,17 @@ landscape master with ffmpeg (`crop=1080:1920`). Upload is MANUAL —
 
 The first v2 vertical slice uses `production.yaml` as the single editable document.
 It is validated with `core.document`, and `render.mlt_xml` generates named-track MLT
-XML without linking libmlt. See `docs/document-schema.md` for the normative schema.
-The existing v1 commands remain available during the incremental migration.
+XML without linking libmlt. After reconciliation, `render.board.build_boards` renders
+named boards through HyperFrames with `--format mov --fps N`, a one-frame duration guard,
+and content-addressed caching. Starter templates cover title cards, bar charts, lower
+thirds, and code reveals in landscape or vertical dimensions, using local
+`/vendor/gsap.min.js`. See `docs/document-schema.md` for the normative schema.
+Migrate a v1 project with `impromptu migrate <v1-dir> <out-dir>`, validate it with
+`impromptu validate <dir>`, then reconcile a fixture transcript with
+`impromptu reconcile <dir> --transcript-json transcript.json -t take.mp4` (or pass a
+JSON-producing whisper command with `--whisper-command`). Reconciliation writes
+scene-relative cues and a `drift-report.md`; the existing v1 commands remain available
+during the incremental migration.
 
 ## Tests
 
@@ -81,7 +90,16 @@ python3 -m pytest tests/ -q
 
 - `docs/decisions.md` — Mode A vs B, render path, YouTube specs
 - `docs/transitions.md` — 58 native xfade transitions + `none` alias
+- `docs/studio.md` — Phase 4-5 server, UI, MCP, container, and verification notes
 - Plan: `.hermes/plans/2026-09-05_youtube-video-pipeline-impromptu-v2.md`
+
+### Local studio server
+
+The optional Phase 5 web/MCP stack runs with `uv sync --extra web` followed by
+`impromptu serve --videos "$HOME/workspace/videos"`. It serves `/healthz`, the
+production directory/upload API, a minimal WebSocket teleprompter, and `/mcp`
+when FastMCP is installed. See `docs/studio.md`; the container build is not
+claimed verified until `podman build` completes.
 
 ## License
 

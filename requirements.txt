@@ -1,0 +1,3 @@
+PyYAML>=6
+
+# The web/MCP stack is optional; install requirements-web.txt for `serve`.

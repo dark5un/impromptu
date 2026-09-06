@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+# Fedora 43 currently resolves to this digest; bump only with a reviewed rebuild.
+FROM fedora:43@sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42 AS studio
+
+# HyperFrames' upstream render layer is Debian-based.  Keeping it as a named
+# stage makes the browser and Node provenance visible; Fedora still owns MLT,
+# ffmpeg, Python, and the service runtime below.
+FROM node:22-bookworm-slim AS hyperframes-render
+ARG HYPERFRAMES_VERSION=latest
+ARG PLAYWRIGHT_VERSION=1.61.1
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip ffmpeg chromium \
+    libgbm1 libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 libxrandr2 \
+    libcups2 libasound2 libpangocairo-1.0-0 libxshmfence1 libgtk-3-0 fontconfig \
+    fonts-liberation fonts-noto-color-emoji fonts-noto-cjk fonts-noto-core fonts-noto-extra \
+    fonts-noto-ui-core fonts-freefont-ttf fonts-dejavu-core && rm -rf /var/lib/apt/lists/* && fc-cache -fv
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium CONTAINER=true
+RUN if [ "$TARGETARCH" = "amd64" ]; then npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path /root/.cache/puppeteer; else npx --yes playwright-core@${PLAYWRIGHT_VERSION} install chromium-headless-shell; fi
+RUN npm install -g hyperframes@${HYPERFRAMES_VERSION}
+RUN SHELL_PATH=$(find /root/.cache/puppeteer /root/.cache/ms-playwright \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -1) && test -n "$SHELL_PATH" && printf '%s\n' '#!/bin/sh' "export PRODUCER_HEADLESS_SHELL_PATH=$SHELL_PATH" 'exec hyperframes render "$@"' > /usr/local/bin/hf-render && chmod +x /usr/local/bin/hf-render
+
+FROM studio
+ARG WHISPER_CPP_REF=master
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PRODUCER_HEADLESS_SHELL_PATH=/opt/chrome-headless-shell
+RUN dnf -y upgrade && dnf -y install \
+    python3 python3-devel gcc gcc-c++ make cmake git curl \
+    mlt mlt-qt6 ffmpeg-free fontconfig \
+    google-noto-sans-fonts google-noto-mono-fonts dejavu-sans-fonts \
+    && dnf clean all && fc-cache -fv
+
+# Build whisper.cpp from source. The model is intentionally a declared mount/
+# build input rather than a silently downloaded multi-hundred-MB artifact.
+RUN git clone --depth 1 --branch ${WHISPER_CPP_REF} https://github.com/ggerganov/whisper.cpp.git /opt/whisper.cpp \
+    && cmake -S /opt/whisper.cpp -B /opt/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF \
+    && cmake --build /opt/whisper.cpp/build --config Release -j2 \
+    && ln -s /opt/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli || true \
+    && mkdir -p /models \
+    && printf '%s\n' 'Mount ggml-base.en.bin at /models/ggml-base.en.bin; no model is bundled.' > /models/README
+
+# Copy the tested HyperFrames render layer. Fedora runtime package names above
+# supply the shared libraries; if a cross-distro browser fails, the build fails.
+COPY --from=hyperframes-render /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=hyperframes-render /usr/local/bin/hf-render /usr/local/bin/hf-render
+COPY --from=hyperframes-render /root/.cache /root/.cache
+COPY --from=hyperframes-render /usr/local/bin/node /usr/local/bin/node
+ENV PATH=/usr/local/bin:$PATH NODE_PATH=/usr/local/lib/node_modules
+
+WORKDIR /app
+COPY . /app
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && /root/.local/bin/uv sync --extra web --no-dev
+EXPOSE 8787
+CMD ["/root/.local/bin/uv", "run", "--no-sync", "uvicorn", "api.http:app", "--host", "0.0.0.0", "--port", "8787"]

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>impromptu studio</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; }
+    body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; background: #111827; color: #e5e7eb; }
+    button, input { padding: .55rem .7rem; border-radius: .35rem; border: 1px solid #4b5563; background: #1f2937; color: inherit; }
+    li { margin: .5rem 0; } #prompt { min-height: 18rem; font-size: 2rem; line-height: 1.4; white-space: pre-wrap; }
+    .muted { color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <h1>impromptu studio</h1>
+  <p id="health" class="muted">checking studio…</p>
+  <section><h2>Productions</h2><form id="new-production"><input id="name" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,127}" placeholder="chapter-1"><button>Create</button></form><ul id="productions"></ul></section>
+  <section><h2>Teleprompter</h2><p id="prompt">Choose a production to connect the remote.</p><button id="pause">Pause</button> <button id="resume">Resume</button> <span id="state" class="muted"></span></section>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

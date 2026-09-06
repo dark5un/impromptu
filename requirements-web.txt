@@ -1,0 +1,9 @@
+# Optional studio server stack. Prefer: uv sync --extra web
+-r requirements.txt
+fastapi>=0.115
+fastmcp>=2
+python-multipart>=0.0.9
+uvicorn[standard]>=0.34
+
+# This file is a compatibility path for environments that do not use uv.
+# FastMCP is intentionally required, not replaced by a local stub.

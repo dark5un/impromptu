@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "impromptu"
+version = "0.2.0"
+description = "Agent-driven presenter video production studio"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6"]
+
+[project.optional-dependencies]
+web = [
+  "fastapi>=0.115",
+  "fastmcp>=2",
+  "python-multipart>=0.0.9",
+  "uvicorn[standard]>=0.34",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[project.scripts]
+impromptu = "impromptu:main"
+
+[tool.hatch.build.targets.wheel]
+include = ["api/**/*.py", "core/**/*.py", "render/**/*.py", "impromptu.py"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Legacy v1 CLI and fixture tests predate the repository-wide lint rollout.
+ignore = ["B008", "BLE001", "EXE001", "F401", "F541", "F841", "FURB129", "I001", "PLW1510", "RUF046", "RUF059", "UP035"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

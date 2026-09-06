@@ -1,0 +1,27 @@
+[Unit]
+Description=impromptu video production studio
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=systemd-impromptu-studio
+Image=localhost/impromptu:latest
+Network=ai.network
+UserNS=keep-id
+PublishPort=127.0.0.1:8787:8787
+ShmSize=2G
+# Host productions are deliberately the only persistent writable state.
+Volume=%h/workspace/videos:/app/videos:Z
+Volume=%h/workspace/impromptu-models:/models:Z,ro
+Environment=IMPROMPTU_PRODUCTIONS=/app/videos
+# The runtime image contains MLT and ffmpeg for timeline rendering and encoding.
+# ffmpeg is installed in the image for media normalization and final encoding.
+# whisper.cpp provides the image's transcription CLI; models remain host-mounted.
+# chrome-headless-shell is bundled by the HyperFrames render layer in the image.
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

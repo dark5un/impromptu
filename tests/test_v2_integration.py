@@ -81,19 +81,44 @@ def test_render_production_writes_document_mlt_and_runs_renderer(tmp_path, produ
     cached.write_bytes(b"mov")
     calls = []
 
-    def runner(project, output, threads=1):
-        calls.append((project, output, threads))
+    def runner(project, output, threads=1, chroma="420"):
+        calls.append((project, output, threads, chroma))
         Path(output).write_bytes(b"master")
 
     result = render_production(tmp_path, runner=runner)
     assert result == tmp_path / "out" / "master.mp4"
     project = tmp_path / "out" / "production.mlt"
     assert project.exists()
-    assert calls == [(project, result, 1)]
+    assert calls == [(project, result, 1, "420")]
     # The board must reach MLT as the rendered .mov, never as authored HTML.
     xml = project.read_text()
     assert cached.name in xml
     assert "chart.html" not in xml
+
+
+@needs_ffmpeg
+def test_render_production_forwards_chroma_to_the_runner(tmp_path, production):
+    """--chroma 444 must reach mlt-melt through render_production."""
+    import yaml
+
+    from render.board import board_cache_path
+
+    (tmp_path / "production.yaml").write_text(yaml.safe_dump(production, sort_keys=False))
+    write_take(tmp_path / "takes" / "take.mp4", 10.0)
+    board_html = tmp_path / "boards" / "chart.html"
+    board_html.parent.mkdir(parents=True, exist_ok=True)
+    board_html.write_text('<div id="root" data-duration="3.0"></div>')
+    cached = board_cache_path(board_html, tmp_path / ".cache" / "boards", 3.0)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"mov")
+    seen = {}
+
+    def runner(project, output, threads=1, chroma="420"):
+        seen["chroma"] = chroma
+        Path(output).write_bytes(b"master")
+
+    render_production(tmp_path, runner=runner, chroma="444")
+    assert seen["chroma"] == "444"
 
 
 @needs_ffmpeg

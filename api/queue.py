@@ -58,14 +58,15 @@ def programme_frames(directory: str | Path) -> int | None:
         return None
 
 
-def _default_runner(directory: Path, *, threads: int = 1,
+def _default_runner(directory: Path, *, threads: int = 1, chroma: str = "420",
                     on_progress: Callable[[float], None] | None = None) -> Path:
     """Render *directory*, forwarding melt's progress to *on_progress*."""
     return render_production(
         directory,
         threads=threads,
-        runner=lambda project, output, threads=1: run_melt(
-            project, output, threads=threads, on_progress=on_progress),
+        chroma=chroma,
+        runner=lambda project, output, threads=1, chroma="420": run_melt(
+            project, output, threads=threads, chroma=chroma, on_progress=on_progress),
     )
 
 

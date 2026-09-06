@@ -69,6 +69,7 @@ def render_production(
     *,
     runner: Callable[..., Any] = run_melt,
     threads: int = 1,
+    chroma: str = "420",
     boards: dict[str, Any] | None = None,
 ) -> Path:
     """Render ``production.yaml`` to ``out/master.mp4`` and return its path.
@@ -89,7 +90,7 @@ def render_production(
     project = out / "production.mlt"
     write_mlt(document, project, root, boards=resolved, require_boards=True)
     master = out / "master.mp4"
-    runner(project, master, threads=threads)
+    runner(project, master, threads=threads, chroma=chroma)
     return master
 
 

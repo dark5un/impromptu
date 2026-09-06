@@ -111,3 +111,44 @@ def test_missing_h264_encoder_is_an_explicit_error(monkeypatch):
     monkeypatch.setattr(melt, "_encoder_available", lambda name: False)
     with pytest.raises(melt.MeltError, match="H.264"):
         melt.h264_encoder()
+
+
+# ── chroma subsampling: 4:2:0 default, 4:4:4 opt-in ──────────────────────────
+
+def test_chroma_defaults_to_420(monkeypatch):
+    """4:2:0 is the compatibility default; nothing opts in by accident."""
+    from render import melt
+
+    monkeypatch.setattr(melt, "h264_encoder", lambda: "libx264")
+    command = melt.melt_command("p.mlt", "o.mp4")
+    joined = " ".join(command)
+    assert "pix_fmt=yuv420p" in joined
+    assert "yuv444p" not in joined
+
+
+def test_chroma_444_requests_yuv444p(monkeypatch):
+    """--chroma 444 must map to the 4:4:4 pixel format, not silently stay 4:2:0."""
+    from render import melt
+
+    monkeypatch.setattr(melt, "h264_encoder", lambda: "libx264")
+    command = melt.melt_command("p.mlt", "o.mp4", chroma="444")
+    joined = " ".join(command)
+    assert "pix_fmt=yuv444p" in joined
+    assert "yuv420p" not in joined
+
+
+def test_chroma_444_rejects_openh264(monkeypatch):
+    """libopenh264 cannot encode 4:4:4; 444 must error, not silently degrade."""
+    from render import melt
+
+    monkeypatch.setattr(melt, "h264_encoder", lambda: "libopenh264")
+    with pytest.raises(melt.MeltError, match="[Ll]ibopenh264.*4:4:4|4:4:4.*libopenh264"):
+        melt.melt_command("p.mlt", "o.mp4", chroma="444")
+
+
+def test_chroma_accepts_only_420_or_444(monkeypatch):
+    from render import melt
+
+    monkeypatch.setattr(melt, "h264_encoder", lambda: "libx264")
+    with pytest.raises(ValueError, match="chroma"):
+        melt.melt_command("p.mlt", "o.mp4", chroma="422")

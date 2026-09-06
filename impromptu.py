@@ -1120,7 +1120,7 @@ def cmd_render_document(args):
 
     directory = Path(args.directory)
     try:
-        output = render_production(directory, threads=args.threads)
+        output = render_production(directory, threads=args.threads, chroma=args.chroma)
         if args.output:
             requested = Path(args.output)
             requested.parent.mkdir(parents=True, exist_ok=True)
@@ -1249,6 +1249,10 @@ def main():
         parser.add_argument("--output")
         parser.add_argument("--vertical", action="store_true", help="reserved for vertical target documents")
         parser.add_argument("--threads", type=int, default=1)
+        parser.add_argument("--chroma", choices=["420", "444"], default="420",
+                            help="chroma subsampling: 420 (default, broadest "
+                            "compat) or 444 (High 4:4:4 Predictive; sharper thin "
+                            "text but rejected by some players; needs libx264)")
         args = parser.parse_args(sys.argv[2:])
         raise SystemExit(cmd_render_document(args))
     if command == "pair":

@@ -166,3 +166,22 @@ Any future base bump should repeat exactly this: rebuild, re-render the
 reference production, SSIM against the current master, inspect frames at each
 transition boundary, re-check the qtblend/affine alpha finding, then re-pin the
 digest and record the new baseline here.
+
+## Chroma subsampling: 4:2:0 default, 4:4:4 opt-in (2026-09-06)
+
+On the demo project `yuv444p` measured **RGB-SSIM 0.977 → 0.990** against a
+lossless reference *and* produced a smaller file (725,195 vs 743,277 bytes).
+Saturated thin text on black — exactly what boards are made of — is the worst
+case for 4:2:0, and it is the residual ~1.17 mean error still visible on glyph
+edges after the alpha fix. The numbers were measured and written down but never
+decided, so the option sat undocumented.
+
+**Decision:** 4:2:0 is the default (`--chroma 420`), because High 4:4:4
+Predictive is rejected by some players and platforms. 4:4:4 is opt-in
+(`impromptu render --chroma 444`), with the compatibility caveat in `--help`.
+
+**Constraint:** 4:4:4 requires the `libx264` encoder. `libopenh264` cannot
+encode it, so `--chroma 444` on a render that resolves to libopenh264 is a
+`MeltError` naming the fix rather than a silent degradation to 4:2:0. The
+container installs RPM Fusion's full ffmpeg, so libx264 is always present there
+and 444 is available for deliverables.

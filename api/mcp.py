@@ -160,15 +160,16 @@ def get_mcp():
         return {name: str(artifact) for name, artifact in built.items()}
 
     @mcp.tool()
-    def render_start(path: str, threads: int = 1) -> str:
+    def render_start(path: str, threads: int = 1, chroma: str = "420") -> str:
         """Composite the document to out/master.mp4 via MLT and return its path.
 
         Boards must already be built: this step composites, it does not launch
         a browser, and an unbuilt board is a named error rather than a silently
-        broken picture.
+        broken picture.  ``chroma`` is 420 (default) or 444 (High 4:4:4
+        Predictive; needs libx264).
         """
         from render.pipeline import render_production
-        return str(render_production(_production_path(path).parent, threads=threads))
+        return str(render_production(_production_path(path).parent, threads=threads, chroma=chroma))
 
     @mcp.tool()
     def package_run(path: str) -> dict[str, str]:

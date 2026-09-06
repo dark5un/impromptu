@@ -20,6 +20,7 @@ X264_CRF = 18
 # generous for 1080p30 talking-head plus motion graphics.
 OPENH264_BITRATE = "12M"
 AUDIO_BITRATE = "192k"
+CHROMA = {"420": "yuv420p", "444": "yuv444p"}
 
 
 class MeltError(RuntimeError):
@@ -52,9 +53,25 @@ def h264_encoder() -> str:
     )
 
 
-def melt_command(project: str | Path, output: str | Path, *, threads: int = 1) -> list[str]:
-    """Build the deterministic mlt-melt argv for an H.264 deliverable."""
+def melt_command(project: str | Path, output: str | Path, *, threads: int = 1,
+                 chroma: str = "420") -> list[str]:
+    """Build the deterministic mlt-melt argv for an H.264 deliverable.
+
+    ``chroma`` defaults to 4:2:0 (``yuv420p``) for maximum player/platform
+    compatibility.  ``444`` requests 4:4:4 (``yuv444p``), which x264 encodes as
+    High 4:4:4 Predictive -- sharper on saturated thin text, but rejected by
+    some players, so it is opt-in only and requires libx264 (libopenh264 cannot
+    encode 4:4:4 and errors rather than silently degrading).
+    """
+    if chroma not in CHROMA:
+        raise ValueError(f"chroma must be one of {sorted(CHROMA)}, not {chroma!r}")
     encoder = h264_encoder()
+    if chroma == "444" and encoder == "libopenh264":
+        raise MeltError(
+            "chroma 444 requires the libx264 encoder (High 4:4:4 Predictive); "
+            "libopenh264 cannot encode 4:4:4. Install ffmpeg with libx264 "
+            "(RPM Fusion) or drop --chroma 444."
+        )
     command = [
         "mlt-melt", str(project),
         # Default realtime scheduling drops and duplicates frames, making the
@@ -66,7 +83,7 @@ def melt_command(project: str | Path, output: str | Path, *, threads: int = 1) -
         "acodec=aac",
         f"ab={AUDIO_BITRATE}",
         "ar=48000",
-        "pix_fmt=yuv420p",
+        f"pix_fmt={CHROMA[chroma]}",
         "movflags=+faststart",
     ]
     if encoder == "libx264":
@@ -82,8 +99,9 @@ def parse_progress(line: str) -> float | None:
 
 
 def run_melt(project: str | Path, output: str | Path, *, threads: int = 1,
+             chroma: str = "420",
              on_progress: Callable[[float], None] | None = None) -> subprocess.CompletedProcess[str]:
-    command = melt_command(project, output, threads=threads)
+    command = melt_command(project, output, threads=threads, chroma=chroma)
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, bufsize=1)
     lines: list[str] = []

@@ -159,6 +159,14 @@ builds and was run directly instead.
 **Genuinely incomplete:** voice-following prompter scroll and the render queue.
 These are the honest remaining gaps against the source plan.
 
+**Open bug:** composited boards show a periodic vertical comb artifact in the
+master (and the bar track renders white instead of dark grey). Diagnosed down
+to interpolated `affine` `rect` keyframes — HyperFrames, the encoder, and
+`affine` with a static rect are each proven innocent. Full evidence and the
+one-step confirmation are in `docs/open-bug-board-comb-artifact.md`. Note that
+every structural assertion passes with the artifact present, which is why it
+needs a pixel-comparison regression test alongside the fix.
+
 **Lesson worth keeping:** ten defects were found in this audit. Six of them —
 the compositor's missing transitions and PiP, the board HTML reaching MLT, the
 broken `hyperframes` bin, unvendored GSAP, and the 48kHz regression — passed a

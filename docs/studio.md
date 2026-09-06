@@ -22,11 +22,13 @@ The server provides:
 - the plain ES-module UI at `/`
 
 The container is intentionally explicit about its cost and inputs: Fedora 43 is
-digest-pinned, MLT and `ffmpeg-free` are installed, whisper.cpp is built from
+digest-pinned, MLT and RPM Fusion's full `ffmpeg` are installed, whisper.cpp is built from
 source, and `/models/ggml-base.en.bin` is a required external model mount. The
 HyperFrames Node 22/browser layer is adapted from the HyperFrames render
-Containerfile. The image has not been claimed as built here; build it in an
-environment with Podman and network access before deploying the quadlet.
+Containerfile. The image builds and was exercised directly: whisper-cli
+transcribed a real take, HyperFrames rendered a real board, and the service
+answered /healthz on a bind-mounted productions root. It has NOT been started
+as a systemd user service; deploy the quadlet yourself.
 
 `quadlets/studio.container` expects `ai.network`, publishes only
 `127.0.0.1:8787`, uses `UserNS=keep-id`, grants Chromium a 2 GiB shared-memory
@@ -60,9 +62,10 @@ channel.
 ## Container build status
 
 Not run as part of this change: the Fedora/Node multi-stage build needs network,
-RPM repositories, and a large browser/model toolchain. Do not treat the
-Containerfile as a verified image until `podman build` completes locally.
+RPM repositories, and a large browser/model toolchain. See
+`docs/v2-traceability.md` for exactly which parts are verified by real
+execution and which are still outstanding.
 
 This project remains MIT; MLT is invoked as a subprocess rather than linked.
-MLT licensing and the explicit encoder choice (`ffmpeg-free` rather than
+MLT licensing and the explicit encoder choice (RPM Fusion `ffmpeg` rather than
 claiming libx264) are documented in `docs/decisions.md`.

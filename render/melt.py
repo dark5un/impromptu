@@ -1,18 +1,79 @@
-"""Run mlt-melt deterministically and parse progress."""
+"""Run mlt-melt deterministically and parse progress.
+
+Encoder choice is explicit here for a reason.  MLT's ``avformat`` consumer
+defaults to **mpeg4 Simple Profile** when no ``vcodec`` is given, which
+produced visibly blocky 1080p output at ~1.5 Mbps — a real defect spotted by
+watching the file, not by any assertion on frame counts or duration.
+"""
 from __future__ import annotations
 
+import functools
 import re
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+
+# CRF 18 is visually transparent for screen-recorded and graphic content.
+X264_CRF = 18
+# libopenh264 has no CRF mode, so quality has to be a bitrate. 12 Mbps is
+# generous for 1080p30 talking-head plus motion graphics.
+OPENH264_BITRATE = "12M"
+AUDIO_BITRATE = "192k"
 
 
 class MeltError(RuntimeError):
     """Raised when mlt-melt fails."""
 
 
+@functools.cache
+def _encoder_available(name: str) -> bool:
+    """Whether the local ffmpeg exposes *name* as an encoder."""
+    if shutil.which("ffmpeg") is None:
+        return False
+    probe = subprocess.run(["ffmpeg", "-hide_banner", "-h", f"encoder={name}"],
+                           capture_output=True, text=True, check=False)
+    return probe.returncode == 0 and "is not recognized" not in probe.stdout
+
+
+def h264_encoder() -> str:
+    """Return the best available H.264 encoder.
+
+    ``libx264`` is preferred for its CRF mode.  Fedora's ``ffmpeg-free`` build
+    ships without it, so ``libopenh264`` is the documented fallback (see
+    docs/decisions.md).
+    """
+    for candidate in ("libx264", "libopenh264"):
+        if _encoder_available(candidate):
+            return candidate
+    raise MeltError(
+        "no H.264 encoder available: install ffmpeg with libx264 (RPM Fusion) "
+        "or libopenh264. Fedora's ffmpeg-free has no libx264."
+    )
+
+
 def melt_command(project: str | Path, output: str | Path, *, threads: int = 1) -> list[str]:
-    return ["mlt-melt", str(project), "real_time=-1", f"threads={threads}", "-consumer", f"avformat:{output}"]
+    """Build the deterministic mlt-melt argv for an H.264 deliverable."""
+    encoder = h264_encoder()
+    command = [
+        "mlt-melt", str(project),
+        # Default realtime scheduling drops and duplicates frames, making the
+        # render nondeterministic.
+        "real_time=-1",
+        f"threads={threads}",
+        "-consumer", f"avformat:{output}",
+        f"vcodec={encoder}",
+        "acodec=aac",
+        f"ab={AUDIO_BITRATE}",
+        "ar=48000",
+        "pix_fmt=yuv420p",
+        "movflags=+faststart",
+    ]
+    if encoder == "libx264":
+        command += [f"crf={X264_CRF}", "preset=medium"]
+    else:
+        command.append(f"vb={OPENH264_BITRATE}")
+    return command
 
 
 def parse_progress(line: str) -> float | None:
@@ -40,5 +101,13 @@ def run_melt(project: str | Path, output: str | Path, *, threads: int = 1,
     return result
 
 
-__all__ = ["MeltError", "melt_command", "parse_progress", "run_melt"]
-                                                          
+__all__ = [
+    "AUDIO_BITRATE",
+    "OPENH264_BITRATE",
+    "X264_CRF",
+    "MeltError",
+    "h264_encoder",
+    "melt_command",
+    "parse_progress",
+    "run_melt",
+]

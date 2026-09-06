@@ -32,10 +32,19 @@ RUN SHELL_PATH=$(find /root/.cache/puppeteer /root/.cache/ms-playwright \( -name
 FROM studio
 ARG WHISPER_CPP_REF=master
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
-RUN dnf -y upgrade && dnf -y install \
+# RPM Fusion's full ffmpeg replaces Fedora's ffmpeg-free so libx264 is present.
+# Without it MLT falls back to mpeg4 Simple Profile and the master is visibly
+# blocky; libopenh264 also has no CRF mode, only bitrate targeting.
+# `--allowerasing` lets the full build displace the ffmpeg-free stack pulled in
+# as an mlt dependency.
+RUN dnf -y install \
+      "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+    && dnf -y upgrade \
+    && dnf -y install --allowerasing \
     python3 python3-devel gcc gcc-c++ make cmake git curl \
-    mlt mlt-qt6 ffmpeg-free fontconfig \
+    mlt mlt-qt6 ffmpeg fontconfig \
     google-noto-sans-fonts google-noto-mono-fonts dejavu-sans-fonts \
+    && ffmpeg -hide_banner -h encoder=libx264 >/dev/null \
     && dnf clean all && fc-cache -fv
 
 # Build whisper.cpp from source. The model is intentionally a declared mount/

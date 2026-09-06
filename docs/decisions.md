@@ -107,3 +107,33 @@ fields left `null`. The plan's review step — "skim production.yaml, change
 anything you disagree with" — is only meaningful if your edits survive the next
 `direct` run. `impromptu direct --force` re-decides every scene when you
 actually want the agent's opinion back.
+
+## H.264 encoder: pinned explicitly (2026-09-06)
+
+MLT's `avformat` consumer defaults to **mpeg4 Simple Profile** when no `vcodec`
+is given. The first end-to-end master rendered that way: visibly blocky 1080p
+at ~1.5 Mbps. Nothing in the test suite noticed, because frame count,
+duration, resolution and CFR were all correct — the defect was only visible by
+watching the file.
+
+`render/melt.py` now selects the encoder at runtime and states quality
+explicitly:
+
+- **libx264** preferred, `crf=18 preset=medium` (CRF is visually transparent
+  for screen-recorded and graphic content).
+- **libopenh264** fallback with `vb=12M`, because it has no CRF mode.
+- No H.264 encoder at all is a `MeltError` naming the fix, not a silent
+  downgrade to mpeg4.
+
+Audio is pinned to `aac ab=192k ar=48000` and `movflags=+faststart` is set for
+progressive playback.
+
+The container installs **RPM Fusion's full `ffmpeg`** (with `--allowerasing`,
+since `mlt` pulls in `ffmpeg-free`) so libx264 is always available, and the
+build fails if `ffmpeg -h encoder=libx264` does not resolve. Fedora's stock
+`ffmpeg-free` has no libx264, which is why plan gotcha 7 offered libopenhh264
+as the compromise; adding RPM Fusion removes the compromise.
+
+Note the host distrobox still runs `ffmpeg-free`, so a render there selects
+libopenh264 and looks softer than a render in the container. Render in the
+container for deliverables.

@@ -13,6 +13,7 @@ let reference = [];      // tokenized script from the server
 let tokenIndex = 0;      // last matched token index
 let following = false;
 let current = null;      // production name
+let resyncArmed = false; // next utterance searches the whole script
 
 // ── productions ───────────────────────────────────────────────────────────────
 
@@ -135,7 +136,14 @@ function startFollowing() {
     const result = event.results[event.results.length - 1];
     const heard = result[0]?.transcript ?? '';
     if (!heard.trim()) return;
-    const next = computeSpeechRecognitionTokenIndex(heard, reference, tokenIndex);
+    const next = computeSpeechRecognitionTokenIndex(
+      heard, reference, tokenIndex,
+      // Resync: for this one utterance widen the window to the whole script so
+      // a reader who fell behind (or jumped ahead) is brought back to where
+      // they actually are. One-shot — it clears after use.
+      resyncArmed ? 0 : tokenIndex,
+    );
+    resyncArmed = false;
     if (next !== tokenIndex) {
       tokenIndex = next;
       paintScript();
@@ -215,6 +223,14 @@ $('unfollow').onclick = () => {
   stopFollowing();
   // Re-asserting speed is what flips `following` off server-side.
   send('speed', { speed: 1.5 });
+};
+$('resync').onclick = () => {
+  // Arm the next recognition result to search the whole script, so the
+  // prompter jumps to wherever the reader actually is. Useful after being
+  // pulled away, or reading from the middle.
+  resyncArmed = true;
+  $('voice-note').textContent =
+    'resync armed — say your current line to jump the prompter to it';
 };
 
 $('new-production').onsubmit = async (event) => {

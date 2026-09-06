@@ -187,15 +187,23 @@ export const levenshteinDistance = (function () {
  * match cost stays bounded no matter how long the script is, and a repeated
  * phrase later in the script cannot yank the position backwards.
  *
+ * Pass ``windowStart`` explicitly to widen the search for a single utterance.
+ * A value of 0 searches the whole script, which is what the teleprompter's
+ * "resync" button does when a reader has fallen behind or jumped ahead and
+ * wants to be brought back to where they actually are. The anti-rewind
+ * guarantee is deliberately suspended for that one call.
+ *
  * @param {string} recognized  what the recogniser heard for this utterance
  * @param {TextElement[]} reference  tokenized script (from `tokenize`)
  * @param {number} lastRecognizedTokenIndex  last confirmed token index
+ * @param {number} [windowStart]  window origin; defaults to the last position
  * @returns {number} the new token index
  */
 export function computeSpeechRecognitionTokenIndex(
   recognized,
   reference,
   lastRecognizedTokenIndex,
+  windowStart = lastRecognizedTokenIndex,
 ) {
   const recognizedTokens = tokenize(recognized).filter(
     (element) => element.type === 'TOKEN',
@@ -207,13 +215,15 @@ export function computeSpeechRecognitionTokenIndex(
     .trim();
 
   if (lastRecognizedTokenIndex < 0) lastRecognizedTokenIndex = 0;
+  if (windowStart < 0) windowStart = 0;
 
   // Window: twice what was heard, plus slack, so skipping a few words still
-  // lands inside the candidate set.
+  // lands inside the candidate set.  windowStart overrides the default origin
+  // (last confirmed position) — for resync the whole script is in scope.
   const referenceTokens = reference
     .slice(
-      lastRecognizedTokenIndex,
-      lastRecognizedTokenIndex + recognizedTokens.length * 2 + 10,
+      windowStart,
+      windowStart + recognizedTokens.length * 2 + 10,
     )
     .filter((element) => element.type === 'TOKEN');
 

@@ -183,3 +183,52 @@ test('the matcher is bounded by the window, not the script length', () => {
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
   assert.ok(elapsedMs < 250, `matching took ${elapsedMs.toFixed(1)}ms`);
 });
+
+// ── resync: deliberately widen the search to the whole script ───────────────
+
+test('default matching does not rewind when speaking an earlier phrase', () => {
+  // The prompter is late; the speaker reads the headline from the TOP. Without
+  // resync the window stays put (the documented trade-off): no jumping back.
+  const reference = tokenize(SCRIPT);
+  const late = reference.find((e) => e.value === 'everything').index;
+  const normal = computeSpeechRecognitionTokenIndex(
+    'immutable infrastructure changes',
+    reference,
+    late,
+  );
+  assert.ok(normal >= late, `without resync the prompter must not rewind (${normal})`);
+});
+
+test('resync windowStart=0 searches the whole script and jumps to the phrase', () => {
+  // The resync button's contract: for ONE utterance the window widens to the
+  // whole script, so a reader who fell behind (or jumped ahead) can be brought
+  // back to where they actually are. windowStart=0 is the explicit opt-out of
+  // the anti-rewind guarantee.
+  const reference = tokenize(SCRIPT);
+  const late = reference.find((e) => e.value === 'everything').index;
+  const resynced = computeSpeechRecognitionTokenIndex(
+    'immutable infrastructure changes',
+    reference,
+    late,
+    /* windowStart */ 0,
+  );
+  assert.ok(resynced >= 0, 'resync must find a token in the whole script');
+  assert.ok(
+    resynced < late,
+    `resync must jump back to the spoken phrase (${resynced} vs ${late})`,
+  );
+  assert.equal(wordAt(reference, resynced), 'changes');
+});
+
+test('resync still advances to the spoken words, not the start', () => {
+  // Even with the window widened, matching stays sequential: reading the first
+  // few words advances a few tokens, it does not snap to the script start.
+  const reference = tokenize(SCRIPT);
+  const index = computeSpeechRecognitionTokenIndex(
+    'immutable infrastructure changes',
+    reference,
+    0,
+    /* windowStart */ 0,
+  );
+  assert.equal(wordAt(reference, index), 'changes');
+});

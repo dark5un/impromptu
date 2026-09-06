@@ -136,13 +136,15 @@ so I will not do it unasked. Say the word and I will run exactly the above.
 
 Both are honest trade-offs in the vendored matcher, pinned by tests, not bugs.
 
-**a. No forward leap.** The algorithm scores candidate prefixes from the last
-confirmed position, so saying a phrase from the middle of the script while the
-prompter sits at the top stays put. This is the right trade-off — leaping on any
-fuzzy mid-script match is how other prompters lose their place on a repeated
-phrase — and manual seek is the escape hatch. If it annoys you in practice, the
-fix is a "resync" button that widens the search window to the whole script for
-one utterance.
+**a. No forward leap — fixed via a `Resync` button.** The algorithm scores
+candidate prefixes from the last confirmed position, so saying a phrase from
+the middle of the script while the prompter sits at the top stays put. That is
+the correct default — leaping on any fuzzy mid-script match is exactly how
+other prompters lose their place on a repeated phrase. A `Resync` button now
+(as of this session) arms the *next* utterance to search the whole script,
+bringing the prompter to wherever the reader actually is, then clears itself.
+Pinned by three tests in `test_speech_matcher.mjs` (no-rewind default, resync
+jump, sequential-within-resync).
 
 **b. Chrome only.** `SpeechRecognition` is a Chrome/WebKit API; Firefox does not
 ship it. The UI says so and falls back to manual speed. A server-side

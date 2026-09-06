@@ -177,10 +177,16 @@ Not features — hygiene that the last two sessions suggest pays off.
   `.cache/boards` split, the silent truncation) passed a green suite and was
   only exposed by running real tools and *looking at the pixels*. The demo take
   is a `testsrc2` pattern; a real recording will surface whatever is left.
-- **Add a pixel assertion to the e2e test.** `tests/test_alpha_compositing.py`
-  proves the compositor handles alpha, but the end-to-end test still asserts
-  only structure. One board-region comparison against the source board would
-  catch a whole class of regression.
+- **Add a pixel assertion to the e2e test.** `tests/test_alpha_compositing.py` so far
+  proved the compositor handles alpha in isolation; it now also carries a
+  full-pipeline **board-region** assertion: a corner-presenter production is
+  rendered through `render_production` with the real `mlt-melt` runner, and the
+  top-left board region is compared against the authored board colour. That
+  catches the whole class of regression the isolated tests would miss — board
+  never reaching the overlay, wrong z-order, or the alpha convention regressing.
+  The precise alpha proof stays lossless (tolerance 6); the e2e placement check
+  tolerates libopenh264's flat-colour drift (`--chroma 444` in the container
+  would tighten it further).
 
 ---
 

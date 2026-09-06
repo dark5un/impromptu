@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from render.board import PREMULTIPLY_FILTER, premultiply_command
+from render.board import PREMULTIPLY_FILTER, board_cache_path, premultiply_command
 
 _FFMPEG = shutil.which("ffmpeg")
 _FFPROBE = shutil.which("ffprobe")
@@ -271,3 +271,93 @@ def test_premultiplied_board_keeps_frame_count_and_alpha_plane(tmp_path):
     assert after["r_frame_rate"] == before["r_frame_rate"]
     assert after["pix_fmt"].startswith("yuva444p"), (
         f"alpha plane lost: pix_fmt is {after['pix_fmt']}")
+
+
+@needs_render_stack
+def test_e2e_render_board_region_matches_its_source(tmp_path):
+    """Full-pipeline: a corner-presenter render must show the BOARD in the region
+    the presenter does not cover, and it must match the authored board colour.
+
+    This is the board-region assertion the remaining plan asked for. The two
+    isolated tests above prove the compositor handles alpha; this one proves the
+    whole chain -- production.yaml -> write_mlt -> mlt-melt with the real
+    runner -- lands the graphic where the document says, in the colour the
+    board was authored as. A corner presenter insets into the bottom-right, so
+    the top-left 25% is pure board and must be brand green.
+    """
+    import yaml
+
+    from render.pipeline import render_production
+
+    board_colour = (90, 247, 142)  # brand green, opaque -> untouched by premultiply
+    png = tmp_path / "board.png"
+    straight = tmp_path / "board-straight.mov"
+    premul = tmp_path / "board.mov"
+    # A real HyperFrames board is authored at the full target resolution (the
+    # stock template defaults to 1920x1080). A smaller source would sit at its
+    # native size in the frame rather than fill it, so match the target.
+    _write_straight_alpha_png(png, (*board_colour, 255), width=1920, height=1080)
+    _make_board_mov(png, straight, frames=4)
+    subprocess.run(premultiply_command(straight, premul), check=True,
+                   capture_output=True)
+
+    # Presenter: a take long enough for a 2.0s corner-inset scene, at full res
+    # so it fills its inset without odd scaling.
+    take = tmp_path / "takes" / "take.mp4"
+    take.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [FFMPEG, "-v", "error", "-y", "-f", "lavfi",
+         "-i", "testsrc2=size=1920x1080:rate=30:duration=3",
+         "-c:v", "libopenh264", "-b:v", "5M",
+         "-fps_mode", "cfr", "-r", "30", str(take)],
+        check=True, capture_output=True)
+
+    # Board media name resolves to a cached .mov in .cache/boards by
+    # data-duration hash (see render.board). Stand in that artifact.
+    board_html = tmp_path / "boards" / "chart.html"
+    board_html.parent.mkdir(parents=True, exist_ok=True)
+    board_html.write_text('<div id="root" data-duration="2.0"></div>')
+    cached = board_cache_path(board_html, tmp_path / ".cache" / "boards", 2.0)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(premul.read_bytes())
+
+    production = {
+        "schema": 1, "title": "E2E",
+        "target": {"orientation": "landscape", "resolution": [1920, 1080], "fps": 30},
+        "media": {"chart": {"type": "board", "src": "boards/chart.html"}},
+        "presenter": {"source": str(take)},
+        "scenes": [
+            {"id": "numbers", "say": "Numbers", "planned_sec": 2.0,
+             "measured_sec": 2.0, "segments": None, "presenter": "corner",
+             "overlay": "chart", "transition": {"type": "cut", "dur": 0.0}},
+        ],
+    }
+    (tmp_path / "production.yaml").write_text(yaml.safe_dump(production, sort_keys=False))
+
+    master = render_production(tmp_path)  # real mlt-melt runner
+    assert master.exists()
+
+    # Sample a pixel in the top-left board region (presenter is inset bottom-right).
+    raw = subprocess.run(
+        [FFMPEG, "-v", "error", "-i", str(master),
+         "-vf", "format=rgb24", "-vframes", "1", "-f", "rawvideo", "-"],
+        check=True, capture_output=True).stdout
+    assert len(raw) == 1920 * 1080 * 3
+    # Presenter insets bottom-right (70%/68% of a 1920x1080 frame); sample a
+    # safe distance into the pure-board top-left region.
+    x, y = 80, 80
+    offset = (y * 1920 + x) * 3
+    pixel = raw[offset], raw[offset + 1], raw[offset + 2]
+    for actual, want in zip(pixel, board_colour):
+        # The frame is H.264 4:2:0 via libopenh264 (host ffmpeg-free), which is
+        # visibly lossy on a saturated flat colour (measured drift was -14/-22/-1
+        # per channel). The precise alpha-convention proof lives in the lossless
+        # isolated tests above (tolerance 6); this e2e test's job is placement
+        # through the real pipeline, so the tolerance absorbs openh264 drift but
+        # still rejects a missing board (testsrc2 noise) and the alpha bug
+        # (black ~0 or white ~255, both >45 from the green target).
+        assert abs(actual - want) <= 45, (
+            f"board region pixel composited to {pixel}, expected ≈{board_colour}. "
+            "Either the board did not reach the overlay, or the alpha/premultiply "
+            "convention regressed."
+        )

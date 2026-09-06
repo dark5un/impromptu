@@ -106,6 +106,34 @@ def test_pair_endpoint_issues_a_token_the_remote_route_accepts(tmp_path):
     assert client.get("/remote", params={"token": token}).status_code == 200
 
 
+def _demo_production(root):
+    """Create a minimal production so the prompter socket has a script.
+
+    The socket now loads the document on connect (it must, to send the words
+    the voice matcher follows), so a pairing test needs a real production to
+    reach the "ready" frame. This keeps the test about the token gate.
+    """
+    directory = root / "demo"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "production.yaml").write_text(
+        "schema: 1\n"
+        "title: Demo\n"
+        "target: {orientation: landscape, resolution: [1920, 1080], fps: 30}\n"
+        "media: {}\n"
+        "presenter: {source: takes/take.mp4}\n"
+        "scenes:\n"
+        "- id: only\n"
+        "  say: Hello.\n"
+        "  planned_sec: 2.0\n"
+        "  measured_sec: null\n"
+        "  segments: null\n"
+        "  presenter: null\n"
+        "  overlay: null\n"
+        "  transition: null\n"
+    )
+    return directory
+
+
 def test_teleprompter_socket_requires_a_valid_token_when_pairing_is_enforced(tmp_path):
     app = create_app(tmp_path, require_pairing=True)
     client = TestClient(app)
@@ -115,11 +143,15 @@ def test_teleprompter_socket_requires_a_valid_token_when_pairing_is_enforced(tmp
 
 
 def test_teleprompter_socket_accepts_a_paired_token(tmp_path):
+    _demo_production(tmp_path)
     app = create_app(tmp_path, require_pairing=True)
     token = app.state.pairing.issue()
     client = TestClient(app)
     with client.websocket_connect(f"/ws/teleprompter/demo?token={token}") as socket:
-        assert socket.receive_json()["type"] == "ready"
+        ready = socket.receive_json()
+    assert ready["type"] == "ready"
+    # A paired client gets the script, not just permission to connect.
+    assert ready["script"] == "Hello."
 
 
 def test_cli_pair_fails_clearly_when_no_studio_is_running(monkeypatch, capsys):

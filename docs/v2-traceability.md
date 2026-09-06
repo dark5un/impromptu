@@ -112,10 +112,10 @@ rejects. Reconcile wrote documents its own loader refused to read.
 | FastMCP mounted in-process | `api/mcp.py` | `test_mcp_has_explicit_optional_dependency_boundary` | runtime | mounts at `/mcp`; 3 tools listed |
 | Actionable error without FastMCP | `api/mcp.py _require_fastmcp` | same | unit | complete |
 | Productions root from environment | `api/http.py create_app` | `test_productions_root_is_configurable...` | runtime | complete |
-| Voice-following prompter | — | — | **not built** | The prompter is manual pause/resume/seek/speed over WebSocket. Plan item 14's voice-following scroll (fork `jlecomte/voice-activated-teleprompter`) is **not implemented**. |
+| Voice-following prompter | `web/static/vendor/speech-matcher.js`, `api/http.py` | `tests/test_speech_matcher.mjs`, `tests/test_prompter_and_queue.py` | runtime | complete — matcher ported from `jlecomte/voice-activated-teleprompter` (MIT, attributed in `web/static/vendor/NOTICE`); socket now serves the script and tracks matched positions, with manual speed/seek as an override. Verified against a live uvicorn: `ready` carried the real 3-scene script, `voice` → `following: true`, `speed` → `following: false`, `follow` → back on. |
 | Phone remote + pairing | `core/pairing.py`, `/remote`, `/api/pair` | `tests/test_pairing.py` | runtime | complete — `impromptu pair` mints a token from the running studio and the printed URL opens the remote |
 | ~12 intent-shaped MCP tools | `api/mcp.py` | `tests/test_mcp_tools.py` | runtime | complete — 12 tools (`read_document`, `patch_document`, `reconcile_run`, `direct_run`, `scene_layout`, `drift_report`, `boards_build`, `render_start`, `package_run`, plus discovery/validation), exercised against the real end-to-end production |
-| Render queue with progress | — | — | **not built** | `render/melt.py` parses progress, but no queue or API surface exposes it. |
+| Render queue with progress | `api/queue.py`, `api/http.py` | `tests/test_prompter_and_queue.py` | runtime | complete — single-worker queue reusing `run_melt(on_progress=...)`; `POST /api/productions/{name}/render` → 202 + job id, `GET /api/renders[/{id}]` to poll. Verified against a live server: a real mlt-melt render reported `0.0% → 40.2% → 60.1% → 100%` across frames 0→328 of 336. |
 
 ## End-to-end chain (verified 2026-09-06)
 
@@ -156,8 +156,25 @@ its binaries, and the HTTP + WebSocket + MCP + pairing surface.
 service, which would install a unit into the user's environment. The image
 builds and was run directly instead.
 
-**Genuinely incomplete:** voice-following prompter scroll and the render queue.
-These are the honest remaining gaps against the source plan.
+**Genuinely incomplete:** nothing remaining against the source plan's built
+scope. Voice-following scroll and the render queue — the two gaps this document
+previously listed — are implemented and verified against a live server. The
+matching algorithm was **ported, not reinvented**, from
+`jlecomte/voice-activated-teleprompter` (MIT), which exists precisely because
+naive prompters stall when you go off script; only its three pure functions
+came over, since impromptu's UI is bundler-free and the upstream is a
+React/Redux/Vite app.
+
+**Open bug found while doing it:** a take shorter than its own timeline is
+silently truncated — the demo's final scene loses 7 frames with a zero exit
+status. Same blind-spot class as the alpha bug: `nb_frames` on the output is
+wrong-but-plausible, so no structural assertion catches it. Diagnosed with the
+fix and a regression test written up in
+`docs/open-bug-take-shorter-than-timeline.md`.
+
+**Testing gap closed:** `httpx` was missing from the dev group, so every
+`fastapi.testclient` test *silently skipped*. That is why the teleprompter
+socket shipped without ever having been exercised. It is now a dev dependency.
 
 **Fixed since the audit:** the comb artifact was an **alpha convention**
 mismatch, not interpolated `affine` keyframes as first diagnosed. HyperFrames

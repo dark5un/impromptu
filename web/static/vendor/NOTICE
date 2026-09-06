@@ -1,0 +1,54 @@
+Third-party code vendored into impromptu
+========================================
+
+impromptu is MIT (see ../../../LICENSE). The files in this directory are
+third-party MIT code, kept here with their attribution rather than rewritten.
+
+
+speech-matcher.js
+-----------------
+Ported from:  https://github.com/jlecomte/voice-activated-teleprompter
+License:      MIT
+Copyright:    (c) 2024 - Present, Julien Lecomte - All Rights Reserved
+
+Contains ports of `src/lib/speech-matcher.ts`, `src/lib/word-tokenizer.ts`, and
+`src/lib/levenshtein.ts`.
+
+`levenshtein.ts` is itself vendored by that project from:
+  https://github.com/gustf/js-levenshtein  (MIT, (c) Gustaf Andersson)
+
+Why vendored rather than depended on: the upstream project is a React + Redux +
+Vite single-page application, and impromptu's web UI is deliberately plain ES
+modules with no bundler and no npm. Only the three pure functions are needed,
+so they were ported and the application layer was left behind.
+
+Changes made in the port:
+  - TypeScript to plain ES modules; types expressed as JSDoc
+  - identifiers renamed to camelCase house style
+  - comments added explaining the windowing behaviour
+  - an unclosed `[` hint now stays a single delimiter instead of consuming the
+    remainder of the script
+
+The matching algorithm is unchanged. Behaviour is pinned by
+tests/test_speech_matcher.mjs.
+
+
+MIT License (applies to the vendored code above)
+------------------------------------------------
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

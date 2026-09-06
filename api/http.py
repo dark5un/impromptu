@@ -70,6 +70,33 @@ def validate_production_file(path: str | Path) -> list[str]:
     return validate_document(document)
 
 
+def prompter_payload(path: str | Path) -> dict[str, Any]:
+    """Return the script the prompter follows, plus its scene boundaries.
+
+    Voice-following is impossible unless the browser has the words to match
+    speech against, and the previous socket sent only playback state. The
+    script is assembled from each scene's ``say`` so it stays the single source
+    of truth in the document -- there is no second copy to drift.
+    """
+    import yaml
+
+    document: Any = yaml.safe_load(Path(path).read_text())
+    if not isinstance(document, dict):
+        raise TypeError(f"{path} is not a production document")
+    scenes = []
+    for scene in document.get("scenes") or []:
+        say = (scene.get("say") or "").strip()
+        scenes.append({"id": scene.get("id"), "say": say,
+                       "planned_sec": scene.get("planned_sec")})
+    return {
+        "title": document.get("title"),
+        # Blank line between scenes: the prompter shows a visible beat where a
+        # scene ends, and the tokenizer treats it as a delimiter either way.
+        "script": "\n\n".join(scene["say"] for scene in scenes if scene["say"]),
+        "scenes": scenes,
+    }
+
+
 def _require_fastapi() -> None:
     if FASTAPI_IMPORT_ERROR is not None:
         raise RuntimeError(
@@ -105,6 +132,8 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
     app = FastAPI(title="impromptu studio", lifespan=mcp_app.lifespan if mcp_app else None)
     app.state.pairing = PairingStore()
     app.state.require_pairing = require_pairing
+    from api.queue import RenderQueue
+    app.state.renders = RenderQueue()
     if mcp_app is not None:
         app.mount("/mcp", mcp_app)
 
@@ -155,6 +184,34 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
         path = production / "production.yaml"
         return {"valid": not validate_production_file(path), "errors": validate_production_file(path)}
 
+    @app.post("/api/productions/{name}/render", status_code=202)
+    async def start_render(name: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Queue a render and return immediately with a job id.
+
+        202 rather than 200: the render has been accepted, not completed. Poll
+        ``/api/renders/{job_id}`` for progress.
+        """
+        try:
+            production = root / safe_production_name(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not (production / "production.yaml").is_file():
+            raise HTTPException(status_code=404, detail="production not found")
+        threads = int((body or {}).get("threads", 1))
+        job_id = app.state.renders.submit(production, threads=threads)
+        return {"job_id": job_id, "state": "queued"}
+
+    @app.get("/api/renders")
+    async def list_renders() -> list[dict[str, Any]]:
+        return app.state.renders.list()
+
+    @app.get("/api/renders/{job_id}")
+    async def render_status(job_id: str) -> dict[str, Any]:
+        job = app.state.renders.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="unknown render job")
+        return job
+
     @app.websocket("/ws/teleprompter/{name}")
     async def teleprompter(websocket: WebSocket, name: str) -> None:
         if app.state.require_pairing and not app.state.pairing.validate(
@@ -162,11 +219,31 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
             await websocket.close(code=1008)
             return
         await websocket.accept()
+        # Send the script before anything else: the browser cannot follow the
+        # voice without the words, and an unknown production must say so rather
+        # than silently prompt an empty script.
+        try:
+            production = root / safe_production_name(name)
+            payload = prompter_payload(production / "production.yaml")
+        except (TypeError, ValueError, OSError) as exc:
+            await websocket.send_json({
+                "type": "error",
+                "detail": f"cannot load production {name!r}: {exc}",
+            })
+            await websocket.close(code=1011)
+            return
         speed = 1.5
-        await websocket.send_json({"type": "ready", "production": name, "paused": False,
-                                   "position": 0, "speed": speed})
         paused = False
         position = 0
+        # Following starts off: the speaker opts in when recognition starts, so
+        # merely opening the page does not imply microphone use.
+        following = False
+        await websocket.send_json({
+            "type": "ready", "production": name, "paused": paused,
+            "position": position, "speed": speed, "following": following,
+            "title": payload["title"], "script": payload["script"],
+            "scenes": payload["scenes"],
+        })
         try:
             while True:
                 message = await websocket.receive_json()
@@ -177,13 +254,26 @@ def create_app(productions_root: str | Path | None = None, web_root: str | Path 
                     paused = False
                 elif action == "toggle":
                     paused = not paused
+                elif action == "voice":
+                    # The browser owns speech recognition and matching; the
+                    # server records the matched token index it reports.
+                    position = max(0, int(message.get("position", position)))
+                    following = True
+                elif action == "follow":
+                    # Explicit way back after a manual override.
+                    following = True
                 elif action == "seek":
                     position = max(0, int(message.get("position", position)))
+                    # Plan item 14: manual control is an override, so a hand
+                    # seek stops voice-following from fighting it.
+                    following = False
                 elif action == "speed":
                     # Clamped to the same range as the terminal prompter.
                     speed = max(0.3, min(10.0, float(message.get("speed", speed))))
+                    following = False
                 await websocket.send_json({"type": "state", "paused": paused,
-                                           "position": position, "speed": speed})
+                                           "position": position, "speed": speed,
+                                           "following": following})
         except Exception:
             return
 

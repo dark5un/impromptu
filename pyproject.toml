@@ -19,7 +19,9 @@ web = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.9"]
+# httpx is what fastapi.testclient needs; without it TestClient-based tests
+# silently skip, which is how the teleprompter socket went untested.
+dev = ["pytest>=8", "ruff>=0.9", "httpx>=0.27"]
 
 [project.scripts]
 impromptu = "impromptu:main"

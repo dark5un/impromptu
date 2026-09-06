@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from render.board import (
     BoardDurationError,
@@ -44,6 +45,21 @@ def test_hyperframes_command_uses_mov_and_fps(tmp_path):
         "hyperframes", "render", str(tmp_path), "--composition", "board.html",
         "--output", str(tmp_path / "board.mov"), "--format", "mov", "--fps", "30",
     ]
+
+
+def test_hyperframes_fps_is_an_integer_not_a_float_string(tmp_path):
+    """HyperFrames rejects ``--fps 30.0`` with "Invalid fps".
+
+    The document carries ``fps`` as a number and ``build_boards`` passes
+    ``float(...)``, so the argv said ``30.0`` and every real board render failed
+    in the container while every unit test passed. Whole rates must serialise
+    without a decimal point.
+    """
+    command = hyperframes_command(tmp_path / "b.html", tmp_path / "b.mov", 30.0)
+    assert command[command.index("--fps") + 1] == "30"
+    # A genuinely fractional rate must survive rather than be truncated.
+    fractional = hyperframes_command(tmp_path / "b.html", tmp_path / "b.mov", 29.97)
+    assert fractional[fractional.index("--fps") + 1] == "29.97"
 
 
 @pytest.mark.parametrize("name", ["title_card", "bar_chart", "lower_third", "code_reveal"])
@@ -127,6 +143,71 @@ def test_cli_exposes_boards_command(monkeypatch, capsys):
         impromptu.main()
     assert raised.value.code == 0
     assert "HyperFrames" in capsys.readouterr().out
+
+
+def test_boards_cli_writes_where_render_looks_for_them(tmp_path, monkeypatch):
+    """`impromptu boards` must populate the cache `render` actually reads.
+
+    Regression: the CLI passed ``out/boards`` while ``render/pipeline.py``
+    resolves boards from ``.cache/boards``. Both commands "succeeded" and the
+    render then failed with an unrendered-board error, or silently composited a
+    stale artifact. The two paths must be the same directory.
+    """
+    import impromptu
+    from render.board import board_cache_path
+    from render.pipeline import _resolve_boards
+
+    production = tmp_path / "production.yaml"
+    production.write_text(
+        "schema: 1\n"
+        "title: t\n"
+        "target: {orientation: landscape, resolution: [1920, 1080], fps: 30}\n"
+        "media: {chart: {type: board, src: boards/chart.html}}\n"
+        "presenter: {source: takes/take.mp4}\n"
+        "scenes:\n"
+        "- id: only\n"
+        "  say: hello\n"
+        "  planned_sec: 2.0\n"
+        "  measured_sec: 2.0\n"
+        "  segments: [{text: hello, start: 0.0, end: 2.0}]\n"
+        "  presenter: corner\n"
+        "  overlay: chart\n"
+        "  transition: {type: cut, dur: 0.0}\n"
+    )
+    board = tmp_path / "boards" / "chart.html"
+    board.parent.mkdir()
+    board.write_text('<div id="root" data-duration="2.0"></div>')
+
+    def fake_run(command, check=True):
+        # Model both stages: HyperFrames' --output, then ffmpeg's positional
+        # destination as the final argument.
+        target = (command[command.index("--output") + 1] if "--output" in command
+                  else command[-1])
+        Path(target).write_bytes(b"mov")
+
+    # render_board captures subprocess.run as a default argument at import
+    # time, so the module attribute is what must be replaced.
+    import render.board as board_module
+    monkeypatch.setattr(board_module.subprocess, "run", fake_run)
+    # Boards stage /vendor/gsap.min.js from IMPROMPTU_VENDOR; point it at a
+    # local stub so this test exercises paths, not the offline-GSAP contract.
+    vendor = tmp_path / "vendor-src"
+    vendor.mkdir()
+    (vendor / "gsap.min.js").write_text("/* gsap */")
+    monkeypatch.setenv("IMPROMPTU_VENDOR", str(vendor))
+    monkeypatch.setattr(impromptu.sys, "argv", ["impromptu", "boards", str(tmp_path)])
+    # The CLI dispatches via SystemExit rather than returning the status.
+    with pytest.raises(SystemExit) as raised:
+        impromptu.main()
+    assert raised.value.code == 0
+
+    expected = board_cache_path(board, tmp_path / ".cache" / "boards", 2.0)
+    assert expected.exists(), (
+        f"boards did not write {expected}; render resolves boards from "
+        ".cache/boards, so anywhere else is invisible to it")
+
+    document = yaml.safe_load(production.read_text())
+    assert _resolve_boards(document, tmp_path) == {"chart": expected}
 
 
 __all__ = []

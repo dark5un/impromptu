@@ -1101,7 +1101,11 @@ def cmd_boards(args):
     directory = Path(args.directory)
     try:
         document = load_document(_production_path(directory))
-        rendered = render_document_boards(document, directory, directory / "out" / "boards")
+        # Must be the cache `render` resolves from (render/pipeline.py
+        # _resolve_boards). Writing to out/boards made `boards` succeed while
+        # `render` still saw an unrendered board.
+        rendered = render_document_boards(
+            document, directory, directory / ".cache" / "boards")
     except (DocumentError, BoardError, OSError) as exc:
         print(f"❌ board rendering failed: {exc}")
         return 1

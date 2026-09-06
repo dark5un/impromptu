@@ -119,12 +119,19 @@ def board_cache_path(board: str | Path, cache_dir: str | Path, duration: float) 
 
 
 def hyperframes_command(board: str | Path, output: str | Path, fps: float = 30) -> list[str]:
-    """Build the subprocess argv for a transparent ProRes MOV board render."""
+    """Build the subprocess argv for a transparent ProRes MOV board render.
+
+    ``fps`` is serialised without a trailing ``.0``: HyperFrames rejects
+    ``--fps 30.0`` outright with "Invalid fps", and the document's numeric
+    ``fps`` reaches here as a float. Fractional rates are preserved.
+    """
     source = Path(board)
+    rate = float(fps)
+    fps_arg = str(int(rate)) if rate.is_integer() else repr(rate)
     return [
         "hyperframes", "render", str(source.parent),
         "--composition", source.name,
-        "--output", str(output), "--format", "mov", "--fps", str(fps),
+        "--output", str(output), "--format", "mov", "--fps", fps_arg,
     ]
 
 
@@ -159,12 +166,16 @@ def render_board(
     *,
     measured_sec: float,
     fps: float = 30,
-    runner: Callable[..., Any] = subprocess.run,
+    runner: Callable[..., Any] | None = None,
     command: list[str] | None = None,
     vendor: bool = True,
     premultiply: bool = True,
 ) -> Path:
     """Validate and render one board, returning its cached MOV artifact."""
+    # Resolved at call time, not bound as a default: a default argument would
+    # capture subprocess.run at import and make the runner unmockable.
+    if runner is None:
+        runner = subprocess.run
     source = Path(board)
     validate_duration(declared_duration(source), measured_sec, fps=fps)
     destination = board_cache_path(source, cache_dir, measured_sec)
@@ -210,7 +221,7 @@ def build_boards(
     *,
     root: str | Path = ".",
     cache_dir: str | Path | None = None,
-    runner: Callable[..., Any] = subprocess.run,
+    runner: Callable[..., Any] | None = None,
     vendor: bool = True,
     premultiply: bool = True,
 ) -> dict[str, Path]:

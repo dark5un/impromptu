@@ -165,12 +165,15 @@ naive prompters stall when you go off script; only its three pure functions
 came over, since impromptu's UI is bundler-free and the upstream is a
 React/Redux/Vite app.
 
-**Open bug found while doing it:** a take shorter than its own timeline is
-silently truncated — the demo's final scene loses 7 frames with a zero exit
-status. Same blind-spot class as the alpha bug: `nb_frames` on the output is
-wrong-but-plausible, so no structural assertion catches it. Diagnosed with the
-fix and a regression test written up in
-`docs/open-bug-take-shorter-than-timeline.md`.
+**Also fixed:** a take shorter than its own timeline was silently truncated —
+the demo's final scene lost 7 frames with a zero exit status, and every
+structural assertion passed. `render/take.py` now validates take length before
+`mlt-melt` runs, measuring *take* time rather than programme time so transition
+overlaps cannot excuse a short recording. Verified on the production that
+produced the defect, host and container identical: it now fails with the scene,
+the 0.23s shortfall, and the fix, exiting 1. Write-up in
+`docs/fixed-take-shorter-than-timeline.md`; nine regression tests assert on the
+error rather than on frame counts.
 
 **Testing gap closed:** `httpx` was missing from the dev group, so every
 `fastapi.testclient` test *silently skipped*. That is why the teleprompter

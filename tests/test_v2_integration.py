@@ -1,10 +1,35 @@
 """Strict v2 direct/render/package contracts."""
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from core.direct import direct_document
 from render.pipeline import package_production, render_production
+
+_FFMPEG = shutil.which("ffmpeg")
+needs_ffmpeg = pytest.mark.skipif(not _FFMPEG, reason="requires ffmpeg")
+
+
+def write_take(path: Path, seconds: float, fps: int = 30) -> Path:
+    """Write a real CFR take of *seconds*.
+
+    `render_production` verifies the take is long enough for the timeline
+    before invoking MLT (a short take is truncated silently -- see
+    docs/open-bug-take-shorter-than-timeline.md), so composition tests need a
+    genuine video rather than a placeholder file. That guard is deliberately
+    unconditional: a flag to switch it off is exactly how a silent-truncation
+    bug would come back.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [_FFMPEG or "ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+         "-i", f"testsrc2=size=320x180:rate={fps}:duration={seconds}",
+         "-c:v", "libopenh264", "-b:v", "1M",
+         "-fps_mode", "cfr", "-r", str(fps), str(path)],
+        check=True, capture_output=True)
+    return path
 
 
 @pytest.fixture
@@ -37,12 +62,15 @@ def test_direct_assigns_treatment_and_transition_from_media(production):
     assert result["scenes"][2]["transition"] == {"type": "dissolve", "dur": 0.4}
 
 
+@needs_ffmpeg
 def test_render_production_writes_document_mlt_and_runs_renderer(tmp_path, production):
     import yaml
 
     from render.board import board_cache_path
 
     (tmp_path / "production.yaml").write_text(yaml.safe_dump(production, sort_keys=False))
+    # Scenes consume 2.0 + 3.0 + 4.0 = 9.0s of take time; give it 10s.
+    write_take(tmp_path / "takes" / "take.mp4", 10.0)
     # `render` composes; it does not build boards.  Stand in the cached alpha
     # artifact that `impromptu boards` would have produced.
     board_html = tmp_path / "boards" / "chart.html"
@@ -68,10 +96,14 @@ def test_render_production_writes_document_mlt_and_runs_renderer(tmp_path, produ
     assert "chart.html" not in xml
 
 
+@needs_ffmpeg
 def test_render_refuses_a_production_whose_boards_are_not_built(tmp_path, production):
     import yaml
 
     (tmp_path / "production.yaml").write_text(yaml.safe_dump(production, sort_keys=False))
+    # A valid take, so the failure under test is the unbuilt board and not the
+    # take-length guard that also runs before MLT.
+    write_take(tmp_path / "takes" / "take.mp4", 10.0)
     with pytest.raises(ValueError, match="chart"):
         render_production(tmp_path, runner=lambda *a, **k: None)
 

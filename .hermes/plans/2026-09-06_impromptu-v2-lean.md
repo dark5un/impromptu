@@ -411,6 +411,7 @@ impromptu serve                         web UI + MCP (what the container runs)
 | Board semi-transparency renders at full opacity (white bar tracks, "comb" on text edges) | HyperFrames writes **straight** alpha, MLT reads it as **premultiplied**. Boards are premultiplied at build time (`premultiply=inplace=1`); see `docs/fixed-board-alpha-convention.md`. Fixed 2026-09-06. |
 | `hyperframes: Invalid fps` | `--fps` was given as `30.0`; whole rates must serialise as `30`. Fixed in `hyperframes_command`. |
 | `boards` succeeds but `render` says the board is unrendered | The two commands disagreed on a directory (`out/boards` vs `.cache/boards`). Both use the cache now. Fixed 2026-09-06. |
+| Final scene ends early / output shorter than the document | The presenter take is shorter than the timeline cut from it; MLT clamps to the source and truncates silently. `render` now refuses first, naming the scene and shortfall — re-run `reconcile` against the take. See `docs/fixed-take-shorter-than-timeline.md`. Fixed 2026-09-06. |
 
 ---
 

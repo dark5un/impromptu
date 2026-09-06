@@ -12,6 +12,7 @@ from core.document import load_document, validate_document
 from render.board import board_cache_path
 from render.melt import run_melt
 from render.mlt_xml import write_mlt
+from render.take import validate_take_length
 
 
 def _production_path(directory: str | Path) -> Path:
@@ -79,6 +80,9 @@ def render_production(
     source = _production_path(directory)
     document = _load_directed(source)
     root = source.parent
+    # Checked before mlt-melt: a take shorter than its timeline is truncated
+    # silently, and the truncation is undetectable in the output afterwards.
+    validate_take_length(document, root)
     out = root / "out"
     out.mkdir(parents=True, exist_ok=True)
     resolved = dict(boards) if boards is not None else _resolve_boards(document, root)

@@ -1072,9 +1072,15 @@ def cmd_migrate(args):
 
 def cmd_reconcile(args):
     directory = Path(args.directory)
+    whisper_command = args.whisper_command
+    if whisper_command is None and args.take is not None and args.transcript_json is None:
+        whisper_command = [
+            "whisper-cli", "-m", os.environ.get("IMPROMPTU_WHISPER_MODEL", "/models/ggml-base.en.bin"),
+            "--output-json", "-f",
+        ]
     try:
         result = reconcile_document(_production_path(directory), transcript_json=args.transcript_json,
-                                    take=args.take, whisper_command=args.whisper_command)
+                                    take=args.take, whisper_command=whisper_command)
     except (OSError, ValueError, DocumentError, subprocess.CalledProcessError) as exc:
         print(f"❌ reconciliation failed: {exc}")
         return 1

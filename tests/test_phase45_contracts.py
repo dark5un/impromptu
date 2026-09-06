@@ -57,6 +57,8 @@ def test_container_and_quadlet_contracts():
     assert "whisper" in container.lower()
     assert "chrome-headless-shell" in container
     assert "PRODUCER_HEADLESS_SHELL_PATH" in container
+    assert "COPY --from=hyperframes-render /usr/local/bin/hyperframes" in container
+    assert "ARG TARGETARCH" in container
     assert "PublishPort=127.0.0.1:8787" in quadlet
     assert "Network=ai.network" in quadlet
     assert "UserNS=keep-id" in quadlet

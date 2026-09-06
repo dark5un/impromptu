@@ -26,6 +26,14 @@ def valid_document():
     }
 
 
+def test_pre_directing_null_scene_fields_are_valid(tmp_path):
+    doc = valid_document()
+    doc["scenes"][0]["presenter"] = None
+    doc["scenes"][0]["overlay"] = None
+    doc["scenes"][0]["transition"] = None
+    assert validate_document(doc) == []
+
+
 def test_valid_document_loads_and_normalizes(tmp_path):
     path = tmp_path / "production.yaml"
     path.write_text("schema: 1\ntitle: Demo\ntarget:\n  orientation: landscape\n  resolution: [1920, 1080]\n  fps: 30\nmedia: {}\npresenter:\n  source: takes/take.mp4\nscenes:\n  - id: intro\n    say: Hello\n    planned_sec: 2\n    measured_sec: null\n    segments: null\n    presenter: fullscreen\n    overlay: null\n    transition: {type: cut, dur: 0}\n")

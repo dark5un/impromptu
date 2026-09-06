@@ -119,12 +119,16 @@ def validate_document(doc: Any) -> list[str]:
                     cursor = float(segment["end"])
             if isinstance(measured, (int, float)) and segments and abs(cursor - measured) > 1e-6:
                 errors.append(f"{where}.segments must end at measured_sec")
-        if scene.get("presenter") not in PRESENTER_MODES:
-            errors.append(f"{where}.presenter must be fullscreen, corner, or hidden")
+        presenter_mode = scene.get("presenter")
+        if presenter_mode is not None and presenter_mode not in PRESENTER_MODES:
+            errors.append(f"{where}.presenter must be fullscreen, corner, or null")
         overlay = scene.get("overlay")
         if overlay is not None and overlay not in (media or {}):
             errors.append(f"{where}.overlay {overlay!r} does not resolve to media")
-        transition = _mapping(scene.get("transition"), f"{where}.transition", errors)
+        transition_value = scene.get("transition")
+        transition = None if transition_value is None else _mapping(
+            transition_value, f"{where}.transition", errors
+        )
         if transition:
             _unknown(transition, TRANSITION_KEYS, f"{where}.transition", errors)
             if transition.get("type") not in TRANSITIONS:

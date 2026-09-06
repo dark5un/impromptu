@@ -64,5 +64,5 @@ RPM repositories, and a large browser/model toolchain. Do not treat the
 Containerfile as a verified image until `podman build` completes locally.
 
 This project remains MIT; MLT is invoked as a subprocess rather than linked.
-KGSL/MLT licensing and the explicit encoder choice (`ffmpeg-free` rather than
+MLT licensing and the explicit encoder choice (`ffmpeg-free` rather than
 claiming libx264) are documented in `docs/decisions.md`.
